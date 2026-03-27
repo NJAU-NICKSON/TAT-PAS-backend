@@ -1,0 +1,225 @@
+from contextlib import asynccontextmanager
+import traceback
+from datetime import datetime, timezone
+from fastapi import Depends, FastAPI, Request, status, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, RedirectResponse
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
+
+from app.api.v1 import auth, users, patients, prescriptions, audits, analytics, departments, beds, visits, billing, sla, consultation_rooms
+from app.config import get_settings
+from app.db.client import connect_db, close_db, get_database
+from app.db.indexes import create_indexes
+from app.jobs.scheduler import start_scheduler, stop_scheduler, scheduler
+from app.security.rbac import Roles, require_roles
+from app.ws import router as ws_router
+
+settings = get_settings()
+limiter = Limiter(key_func=get_remote_address)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    await connect_db()
+    db = await get_database()
+    try:
+        await db.command("ping")
+        print("MongoDB connected successfully")
+    except Exception as e:
+        print(f"MongoDB connection error: {e}")
+
+    await create_indexes(db)
+    try:
+        await start_scheduler()
+    except Exception as e:
+        print(f"Scheduler start error: {e}")
+
+    yield
+
+    try:
+        await stop_scheduler()
+    except Exception as e:
+        print(f"Scheduler stop error: {e}")
+    await close_db()
+
+
+app = FastAPI(
+    title="TAT-PAS API",
+    version="1.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
+)
+
+app.state.limiter = limiter
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth.router, prefix="/api/v1")
+app.include_router(users.router, prefix="/api/v1")
+app.include_router(patients.router, prefix="/api/v1")
+app.include_router(prescriptions.router, prefix="/api/v1")
+app.include_router(audits.router, prefix="/api/v1")
+app.include_router(analytics.router, prefix="/api/v1")
+app.include_router(departments.router, prefix="/api/v1")
+app.include_router(beds.router, prefix="/api/v1")
+app.include_router(visits.router, prefix="/api/v1")
+app.include_router(billing.router, prefix="/api/v1")
+app.include_router(sla.router, prefix="/api/v1")
+app.include_router(consultation_rooms.router, prefix="/api/v1")
+app.include_router(ws_router.router, prefix="")
+
+
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        content={"detail": "Too many requests", "code": "RATE_LIMIT_EXCEEDED"}
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    formatted_errors = []
+    for error in errors:
+        formatted_errors.append({
+            "field": ".".join(str(loc) for loc in error["loc"]),
+            "message": error["msg"],
+            "type": error["type"]
+        })
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": formatted_errors, "code": "VALIDATION_ERROR"},
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail},
+    )
+
+
+@app.exception_handler(Exception)
+async def general_exception_handler(request: Request, exc: Exception):
+    print(f"Unhandled exception: {exc}")
+    traceback.print_exc()
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"detail": "An internal error occurred", "code": "INTERNAL_ERROR"},
+    )
+
+
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    return RedirectResponse(url="/docs")
+
+
+@app.get("/api/v1/admin/health", tags=["admin"])
+async def health_check(
+    request: Request,
+    full: bool = False,
+    current_user=Depends(require_roles(Roles.admin)),
+):
+    """
+    Detailed health check.
+    - Database status
+    - Scheduler status (placeholder)
+    - Per‑module route counts – instantly see if any module has 0 routes
+    - Unexpected routes (those not matching known modules)
+    - Optional full route list when ?full=true
+    """
+    db_status = "ok"
+    try:
+        db = await get_database()
+        await db.command("ping")
+    except Exception:
+        db_status = "error"
+
+    scheduler_status = "ok" if scheduler.running else "stopped"
+
+    # Define expected modules and their prefixes
+    expected_modules = {
+        "auth": "/api/v1/auth",
+        "users": "/api/v1/users",
+        "patients": "/api/v1/patients",
+        "prescriptions": "/api/v1/prescriptions",
+        "audits": "/api/v1/audits",
+        "analytics": "/api/v1/analytics",
+        "departments": "/api/v1/departments",
+        "beds": "/api/v1/beds",
+        "visits": "/api/v1/visits",
+        "websocket": "",  
+    }
+
+    module_counts = {name: 0 for name in expected_modules}
+    unexpected_routes = []
+    all_routes = []  
+    
+    for route in request.app.routes:
+        path = getattr(route, "path", None)
+        if not path:
+            continue
+
+        if path in ("/", "/docs", "/redoc", "/api/v1/admin/health"):
+            continue
+
+        matched = False
+        for module_name, prefix in expected_modules.items():
+            if path.startswith(prefix):
+                module_counts[module_name] += 1
+                matched = True
+                break
+
+        if not matched:
+            unexpected_routes.append(path)
+
+        if full:
+            methods = getattr(route, "methods", None)
+            if methods:
+                all_routes.append({
+                    "path": path,
+                    "methods": list(methods),
+                    "name": route.name
+                })
+            else:
+                all_routes.append({
+                    "path": path,
+                    "type": "websocket" if "websocket" in str(route).lower() else "other",
+                    "name": route.name
+                })
+
+    overall_status = "ok"
+    if db_status != "ok":
+        overall_status = "degraded"
+    elif any(count == 0 for count in module_counts.values()):
+        overall_status = "degraded"
+
+    response = {
+        "status": overall_status,
+        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "database": db_status,
+        "scheduler": scheduler_status,
+        "modules": module_counts,
+        "unexpected_routes_count": len(unexpected_routes),
+    }
+
+    if full:
+        response["unexpected_routes"] = unexpected_routes
+        response["all_routes"] = all_routes
+        response["total_routes"] = len(all_routes)
+    else:
+        response["note"] = "Add ?full=true to see all routes and unexpected paths."
+
+    return response

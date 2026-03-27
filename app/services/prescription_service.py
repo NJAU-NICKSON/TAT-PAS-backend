@@ -1,0 +1,703 @@
+import re
+from datetime import datetime, timezone
+from typing import Optional, Dict, Any, List
+from bson import ObjectId
+from pymongo.asynchronous.database import AsyncDatabase
+from app.models.prescription import (
+    PrescriptionCreate,
+    PrescriptionInDB,
+    PrescriptionStatus,
+    MedicationItem,
+    Priority,
+    OrderSource,
+)
+from fastapi import HTTPException, status as http_status
+from app.services import audit_service
+from app.ws.manager import manager
+
+
+# SLA thresholds by priority in minutes. These are fallbacks if sla_config is missing.
+_DEFAULT_SLA_THRESHOLDS: Dict[str, float] = {
+    "stat": 15.0,
+    "urgent": 30.0,
+    "routine": 60.0,
+    "discharge": 45.0,
+    "nicu": 20.0,
+    "chemo": 120.0,
+}
+
+# Warning threshold as a fraction of total SLA window
+_SLA_WARNING_FRACTION = 0.75
+
+
+def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
+    medications = []
+    for m in doc.get("medications", []):
+        if isinstance(m, dict):
+            medications.append(MedicationItem(**m))
+        else:
+            medications.append(m)
+
+    def _str(val) -> Optional[str]:
+        if val is None:
+            return None
+        return str(val) if not isinstance(val, str) else val
+
+    priority_val = doc.get("priority")
+    if priority_val is None:
+        priority = Priority.routine
+    elif isinstance(priority_val, str):
+        try:
+            priority = Priority(priority_val)
+        except ValueError:
+            priority = Priority.routine
+    else:
+        priority = priority_val
+
+    order_source_val = doc.get("order_source")
+    if order_source_val is None:
+        order_source = OrderSource.opd
+    elif isinstance(order_source_val, str):
+        try:
+            order_source = OrderSource(order_source_val)
+        except ValueError:
+            order_source = OrderSource.opd
+    else:
+        order_source = order_source_val
+
+    return PrescriptionInDB(
+        id=str(doc["_id"]),
+        patient_id=_str(doc["patient_id"]) or "",
+        doctor_id=_str(doc["doctor_id"]) or "",
+        medications=medications,
+        status=doc["status"],
+        priority=priority,
+        order_source=order_source,
+        ordered_at=doc.get("ordered_at"),
+        submitted_at=doc.get("submitted_at"),
+        verified_at=doc.get("verified_at"),
+        dispensed_at=doc.get("dispensed_at"),
+        administered_at=doc.get("administered_at"),
+        flags=doc.get("flags", []),
+        notes=doc.get("notes"),
+        pharmacist_comment=doc.get("pharmacist_comment"),
+        created_at=doc["created_at"],
+        updated_at=doc["updated_at"],
+        tat_order_to_submit_min=doc.get("tat_order_to_submit_min"),
+        tat_submit_to_verify_min=doc.get("tat_submit_to_verify_min"),
+        tat_flag_hold_min=doc.get("tat_flag_hold_min"),
+        tat_verify_to_dispense_min=doc.get("tat_verify_to_dispense_min"),
+        tat_dispense_to_admin_min=doc.get("tat_dispense_to_admin_min"),
+        tat_pharmacy_min=doc.get("tat_pharmacy_min"),
+        tat_total_min=doc.get("tat_total_min"),
+        sla_threshold_min=doc.get("sla_threshold_min"),
+        sla_breached=doc.get("sla_breached", False),
+        sla_breach_duration_min=doc.get("sla_breach_duration_min"),
+        tat_breached_at=doc.get("tat_breached_at"),
+        rx_number=doc.get("rx_number"),
+        visit_id=_str(doc.get("visit_id")),
+        department_id=_str(doc.get("department_id")),
+        ward_id=_str(doc.get("ward_id")),
+        dispensed_by_id=_str(doc.get("dispensed_by_id")),
+        dispensed_by_name=doc.get("dispensed_by_name"),
+        administered_by_id=_str(doc.get("administered_by_id")),
+        administered_by_name=doc.get("administered_by_name"),
+        administered_dose=doc.get("administered_dose"),
+        administered_route=doc.get("administered_route"),
+        administration_notes=doc.get("administration_notes"),
+        receipt_number=doc.get("receipt_number"),
+        auditor_id=_str(doc.get("auditor_id")),
+        auditor_name=doc.get("auditor_name"),
+        auditor_approved_at=doc.get("auditor_approved_at"),
+        returned_at=doc.get("returned_at"),
+        return_reason=doc.get("return_reason"),
+        weight_kg=doc.get("weight_kg"),
+        patient_name=doc.get("patient_name"),
+        doctor_name=doc.get("doctor_name"),
+    )
+
+
+async def _enrich_docs_with_names(db: AsyncDatabase, docs: List[dict]) -> List[dict]:
+    """Attach patient_name, doctor_name, and actor names to prescription docs in-place."""
+    patient_ids = list({d["patient_id"] for d in docs if d.get("patient_id")})
+    user_id_set: set = set()
+    for d in docs:
+        for field in ("doctor_id", "dispensed_by_id", "administered_by_id", "auditor_id"):
+            if d.get(field):
+                user_id_set.add(str(d[field]))
+
+    patient_map: Dict[str, str] = {}
+    if patient_ids:
+        valid_pids = [ObjectId(pid) for pid in patient_ids if ObjectId.is_valid(pid)]
+        if valid_pids:
+            cursor = db.patients.find({"_id": {"$in": valid_pids}}, {"first_name": 1, "last_name": 1})
+            async for pdoc in cursor:
+                name = f"{pdoc.get('first_name', '')} {pdoc.get('last_name', '')}".strip()
+                patient_map[str(pdoc["_id"])] = name or str(pdoc["_id"])
+
+    user_map: Dict[str, str] = {}
+    if user_id_set:
+        valid_uids = [ObjectId(uid) for uid in user_id_set if ObjectId.is_valid(uid)]
+        if valid_uids:
+            cursor = db.users.find({"_id": {"$in": valid_uids}}, {"full_name": 1, "username": 1})
+            async for udoc in cursor:
+                user_map[str(udoc["_id"])] = udoc.get("full_name") or udoc.get("username") or str(udoc["_id"])
+
+    for doc in docs:
+        doc["patient_name"] = patient_map.get(str(doc.get("patient_id")), "")
+        doc["doctor_name"] = user_map.get(str(doc.get("doctor_id")), "")
+        if doc.get("dispensed_by_id") and not doc.get("dispensed_by_name"):
+            doc["dispensed_by_name"] = user_map.get(str(doc["dispensed_by_id"]), "")
+        if doc.get("administered_by_id") and not doc.get("administered_by_name"):
+            doc["administered_by_name"] = user_map.get(str(doc["administered_by_id"]), "")
+        if doc.get("auditor_id") and not doc.get("auditor_name"):
+            doc["auditor_name"] = user_map.get(str(doc["auditor_id"]), "")
+
+    return docs
+
+
+async def _get_sla_threshold(db: AsyncDatabase, priority: str) -> float:
+    """Look up the SLA threshold for a given priority from the config collection."""
+    doc = await db.sla_config.find_one({"priority": priority})
+    if doc and doc.get("threshold_min") is not None:
+        return float(doc["threshold_min"])
+    return _DEFAULT_SLA_THRESHOLDS.get(priority, 60.0)
+
+
+async def create_prescription(
+    db: AsyncDatabase,
+    prescription: PrescriptionCreate,
+    doctor_id: str,
+) -> PrescriptionInDB:
+    now = datetime.now(timezone.utc)
+    priority_str = prescription.priority.value if hasattr(prescription.priority, "value") else str(prescription.priority)
+    sla_threshold = await _get_sla_threshold(db, priority_str)
+
+    doc = {
+        "patient_id": prescription.patient_id,
+        "doctor_id": doctor_id,
+        "medications": [m.model_dump() for m in prescription.medications],
+        "priority": priority_str,
+        "order_source": prescription.order_source.value if hasattr(prescription.order_source, "value") else str(prescription.order_source),
+        "status": PrescriptionStatus.submitted.value,
+        "ordered_at": now,
+        "submitted_at": now,
+        "verified_at": None,
+        "dispensed_at": None,
+        "administered_at": None,
+        "flags": [],
+        "notes": prescription.notes,
+        "pharmacist_comment": None,
+        "visit_id": prescription.visit_id,
+        "department_id": prescription.department_id,
+        "sla_threshold_min": sla_threshold,
+        "sla_breached": False,
+        "sla_breach_duration_min": None,
+        "tat_breached_at": None,
+        "dispensed_by_id": None,
+        "administered_by_id": None,
+        "created_at": now,
+        "updated_at": now,
+    }
+    result = await db.prescriptions.insert_one(doc)
+    doc["_id"] = result.inserted_id
+
+    event = {
+        "event_type": "prescription.created",
+        "entity_id": str(result.inserted_id),
+        "entity_type": "prescription",
+        "message": f"New {priority_str} prescription submitted",
+        "data": {
+            "priority": priority_str,
+            "patient_id": prescription.patient_id,
+            "sla_threshold_min": sla_threshold,
+        },
+        "timestamp": now.isoformat(),
+        "triggered_by_role": "doctor",
+    }
+    await manager.broadcast("pharmacy", event)
+
+    return _doc_to_prescription(doc)
+
+
+async def get_prescriptions(
+    db: AsyncDatabase,
+    status: Optional[str] = None,
+    patient_id: Optional[str] = None,
+    doctor_id: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 20,
+) -> List[PrescriptionInDB]:
+    query: dict = {}
+    if status:
+        query["status"] = status
+    if patient_id:
+        query["patient_id"] = patient_id
+    if doctor_id:
+        query["doctor_id"] = doctor_id
+
+    # Sort: STAT first, then by submitted_at ascending (longest wait first)
+    priority_order = ["stat", "nicu", "urgent", "discharge", "routine", "chemo"]
+    cursor = db.prescriptions.find(query).sort([
+        ("submitted_at", 1),
+    ]).skip(skip).limit(limit)
+    docs = await cursor.to_list(length=limit)
+
+    results = [_doc_to_prescription(doc) for doc in docs]
+
+    # Re-sort in Python to apply priority ordering since MongoDB sort on array enum order is complex
+    priority_rank = {p: i for i, p in enumerate(priority_order)}
+    results.sort(key=lambda p: (
+        priority_rank.get(p.priority.value if hasattr(p.priority, "value") else str(p.priority), 99),
+        p.submitted_at or datetime.now(timezone.utc),
+    ))
+
+    return results
+
+
+async def get_prescription_queue(
+    db: AsyncDatabase,
+    skip: int = 0,
+    limit: int = 50,
+) -> List[PrescriptionInDB]:
+    """Return active queue: submitted and flagged, sorted by priority then age."""
+    query = {"status": {"$in": ["submitted", "flagged"]}}
+    docs_cursor = db.prescriptions.find(query).skip(skip).limit(limit)
+    docs = await docs_cursor.to_list(length=limit)
+    docs = await _enrich_docs_with_names(db, docs)
+    results = [_doc_to_prescription(doc) for doc in docs]
+
+    priority_rank = {p: i for i, p in enumerate(["stat", "nicu", "urgent", "discharge", "routine", "chemo"])}
+    results.sort(key=lambda p: (
+        priority_rank.get(p.priority.value if hasattr(p.priority, "value") else str(p.priority), 99),
+        p.submitted_at or datetime.now(timezone.utc),
+    ))
+    return results
+
+
+async def get_prescription_by_id(
+    db: AsyncDatabase, prescription_id: str
+) -> Optional[PrescriptionInDB]:
+    try:
+        obj_id = ObjectId(prescription_id)
+    except Exception:
+        return None
+    doc = await db.prescriptions.find_one({"_id": obj_id})
+    if not doc:
+        return None
+    docs = await _enrich_docs_with_names(db, [doc])
+    return _doc_to_prescription(docs[0])
+
+
+async def get_prescription_history(
+    db: AsyncDatabase, prescription_id: str
+) -> List[dict]:
+    """Return all audit records for a prescription, sorted oldest first."""
+    cursor = db.audit_records.find(
+        {"prescription_id": prescription_id}
+    ).sort("created_at", 1)
+    docs = await cursor.to_list(length=None)
+    history = []
+    for doc in docs:
+        history.append({
+            "id": str(doc["_id"]),
+            "type": doc.get("type", "unknown"),
+            "issue": doc.get("issue", ""),
+            "severity": doc.get("severity", "low"),
+            "flag_code": doc.get("flag_code", "generic"),
+            "created_by": str(doc.get("created_by", "")),
+            "created_by_role": doc.get("created_by_role", ""),
+            "resolved": doc.get("resolved", False),
+            "original_flag_id": str(doc["original_flag_id"]) if doc.get("original_flag_id") else None,
+            "created_at": doc["created_at"].isoformat() if isinstance(doc.get("created_at"), datetime) else str(doc.get("created_at", "")),
+        })
+    return history
+
+
+PERMITTED_TRANSITIONS = {
+    "draft": {"submitted": ["doctor", "surgeon", "anaesthetist", "midwife"]},
+    "submitted": {
+        "verified": ["auditor", "admin"],
+        "pending_amendment": ["auditor", "admin"],
+        "flagged": ["pharmacist", "auditor", "admin"],
+    },
+    "pending_amendment": {"submitted": ["doctor", "surgeon", "anaesthetist", "midwife", "admin"]},
+    "flagged": {"verified": ["auditor", "admin"]},
+    "verified": {"dispensed": ["pharmacist", "admin"]},
+    "dispensed": {"administered": ["nurse", "admin"]},
+}
+
+
+async def advance_status(
+    db: AsyncDatabase,
+    prescription_id: str,
+    new_status: str,
+    user_id: str,
+    role: str,
+    update_data: Optional[Dict[str, Any]] = None,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+) -> Optional[PrescriptionInDB]:
+    if update_data is None:
+        update_data = {}
+
+    try:
+        obj_id = ObjectId(prescription_id)
+    except Exception:
+        return None
+
+    old_doc = await db.prescriptions.find_one({"_id": obj_id})
+    if not old_doc:
+        return None
+
+    current_status = old_doc["status"]
+    now = datetime.now(timezone.utc)
+    set_fields: dict = {"status": new_status, "updated_at": now}
+
+    if update_data.get("notes") is not None:
+        set_fields["notes"] = update_data["notes"]
+    if update_data.get("pharmacist_comment") is not None:
+        set_fields["pharmacist_comment"] = update_data["pharmacist_comment"]
+    if update_data.get("return_reason") is not None:
+        set_fields["return_reason"] = update_data["return_reason"]
+    if update_data.get("administered_dose") is not None:
+        set_fields["administered_dose"] = update_data["administered_dose"]
+    if update_data.get("administered_route") is not None:
+        set_fields["administered_route"] = update_data["administered_route"]
+    if update_data.get("administration_notes") is not None:
+        set_fields["administration_notes"] = update_data["administration_notes"]
+    if update_data.get("receipt_number") is not None:
+        set_fields["receipt_number"] = update_data["receipt_number"]
+
+    if role == "admin":
+        if new_status != "archived":
+            allowed_roles = PERMITTED_TRANSITIONS.get(current_status, {}).get(new_status, [])
+            if not allowed_roles:
+                raise HTTPException(
+                    status_code=http_status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "code": "INVALID_STATUS_TRANSITION",
+                        "message": f"Cannot transition from {current_status} to {new_status}.",
+                        "details": {"from": current_status, "to": new_status},
+                    },
+                )
+    else:
+        if new_status == "archived":
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "ARCHIVE_FORBIDDEN",
+                    "message": "Only admin can archive prescriptions.",
+                    "details": {},
+                },
+            )
+        allowed_roles = PERMITTED_TRANSITIONS.get(current_status, {}).get(new_status, [])
+        if not allowed_roles:
+            raise HTTPException(
+                status_code=http_status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "INVALID_STATUS_TRANSITION",
+                    "message": f"Cannot transition from {current_status} to {new_status}.",
+                    "details": {"from": current_status, "to": new_status},
+                },
+            )
+        if role not in allowed_roles:
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "TRANSITION_ROLE_FORBIDDEN",
+                    "message": f"Role {role} cannot transition from {current_status} to {new_status}.",
+                    "details": {"role": role, "from": current_status, "to": new_status},
+                },
+            )
+
+    # Block verification if unresolved clinical flags exist (skip for auditor overrides)
+    if new_status == "verified" and role not in ("admin",):
+        unresolved_count = await db.audit_records.count_documents({
+            "prescription_id": prescription_id,
+            "resolved": False,
+            "type": {"$nin": ["resolution", "countersign", "status_change"]},
+        })
+        if unresolved_count > 0:
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "OPEN_FLAGS_BLOCK_VERIFICATION",
+                    "message": "This prescription has unresolved audit flags. Resolve all flags before verifying.",
+                    "details": {"prescription_id": prescription_id, "open_flag_count": unresolved_count},
+                },
+            )
+
+    # Compute TAT fields per transition
+    if new_status == "submitted":
+        set_fields["submitted_at"] = now
+        ordered_at = old_doc.get("ordered_at")
+        if ordered_at:
+            set_fields["tat_order_to_submit_min"] = (now - ordered_at).total_seconds() / 60
+
+    elif new_status == "pending_amendment":
+        set_fields["returned_at"] = now
+        set_fields["auditor_id"] = user_id
+
+    elif new_status == "verified":
+        set_fields["verified_at"] = now
+        set_fields["auditor_id"] = user_id
+        submitted_at = old_doc.get("submitted_at")
+        if submitted_at:
+            set_fields["tat_submit_to_verify_min"] = (now - submitted_at).total_seconds() / 60
+
+        # Compute total flag hold time from all resolved flags
+        resolved_cursor = db.audit_records.find({
+            "prescription_id": prescription_id,
+            "type": "resolution",
+        })
+        resolved_audits = await resolved_cursor.to_list(length=None)
+
+        tat_flag_hold_min = 0.0
+        for audit in resolved_audits:
+            original_flag_id = audit.get("original_flag_id")
+            if original_flag_id:
+                try:
+                    orig = await db.audit_records.find_one({"_id": ObjectId(original_flag_id)})
+                except Exception:
+                    orig = None
+                if orig and audit.get("resolved_at") and orig.get("created_at"):
+                    flag_hold = (audit["resolved_at"] - orig["created_at"]).total_seconds() / 60
+                    tat_flag_hold_min += flag_hold
+        set_fields["tat_flag_hold_min"] = tat_flag_hold_min
+
+    elif new_status == "dispensed":
+        set_fields["dispensed_at"] = now
+        set_fields["dispensed_by_id"] = user_id
+        verified_at = old_doc.get("verified_at")
+        submitted_at = old_doc.get("submitted_at")
+
+        if verified_at:
+            set_fields["tat_verify_to_dispense_min"] = (now - verified_at).total_seconds() / 60
+
+        if submitted_at:
+            tat_pharmacy_min = (now - submitted_at).total_seconds() / 60
+            set_fields["tat_pharmacy_min"] = tat_pharmacy_min
+
+            sla_threshold_min = old_doc.get("sla_threshold_min")
+            if sla_threshold_min and tat_pharmacy_min > sla_threshold_min:
+                sla_breach_duration_min = tat_pharmacy_min - sla_threshold_min
+                set_fields["sla_breached"] = True
+                set_fields["sla_breach_duration_min"] = sla_breach_duration_min
+                set_fields["tat_breached_at"] = now
+
+                safe_old = audit_service._make_snapshot_safe(old_doc)
+                await audit_service.create_audit_record(
+                    db=db,
+                    prescription_id=prescription_id,
+                    created_by="system",
+                    created_by_role="system",
+                    audit_type="sla_breach",
+                    issue=f"SLA breached by {sla_breach_duration_min:.1f} minutes",
+                    severity="high",
+                    recommendation="Review pharmacy workflow for this priority level",
+                    flag_code="sla_breach",
+                    before_snapshot=safe_old,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                )
+
+                rx_number = old_doc.get("rx_number", prescription_id)
+                priority = old_doc.get("priority", "unknown")
+                breach_event = {
+                    "event_type": "sla.breached",
+                    "entity_id": prescription_id,
+                    "entity_type": "prescription",
+                    "message": f"Prescription {rx_number} breached SLA",
+                    "data": {
+                        "rx_number": rx_number,
+                        "patient_id": old_doc.get("patient_id"),
+                        "priority": priority,
+                        "sla_breach_duration_min": sla_breach_duration_min,
+                    },
+                    "timestamp": now.isoformat(),
+                    "triggered_by_role": role,
+                }
+                doctor_id_val = old_doc.get("doctor_id")
+                breach_rooms = ["pharmacy", "auditor", "admin"]
+                if doctor_id_val:
+                    breach_rooms.append(f"doctor:{str(doctor_id_val)}")
+                await manager.broadcast_multi(breach_rooms, breach_event)
+
+    elif new_status == "administered":
+        set_fields["administered_at"] = now
+        set_fields["administered_by_id"] = user_id
+        dispensed_at = old_doc.get("dispensed_at")
+        ordered_at = old_doc.get("ordered_at")
+
+        if dispensed_at:
+            set_fields["tat_dispense_to_admin_min"] = (now - dispensed_at).total_seconds() / 60
+
+        if ordered_at:
+            set_fields["tat_total_min"] = (now - ordered_at).total_seconds() / 60
+
+    result = await db.prescriptions.find_one_and_update(
+        {"_id": obj_id},
+        {"$set": set_fields},
+        return_document=True,
+    )
+
+    if not result:
+        return None
+
+    safe_old = audit_service._make_snapshot_safe(old_doc)
+    safe_new = audit_service._make_snapshot_safe(result)
+
+    await audit_service.create_audit_record(
+        db=db,
+        prescription_id=prescription_id,
+        created_by=user_id,
+        created_by_role=role,
+        audit_type="status_change",
+        issue=f"Status changed from {current_status} to {new_status}",
+        severity="low",
+        recommendation="",
+        flag_code="status_change",
+        before_snapshot=safe_old,
+        after_snapshot=safe_new,
+        ip_address=ip_address,
+        user_agent=user_agent,
+    )
+
+    rx_number = result.get("rx_number", prescription_id)
+    priority = result.get("priority", "unknown")
+    status_event = {
+        "event_type": "prescription.status_changed",
+        "entity_id": prescription_id,
+        "entity_type": "prescription",
+        "message": f"Prescription {rx_number} moved to {new_status}",
+        "data": {
+            "rx_number": rx_number,
+            "new_status": new_status,
+            "patient_id": result.get("patient_id"),
+            "priority": priority,
+        },
+        "timestamp": now.isoformat(),
+        "triggered_by_role": role,
+    }
+
+    doctor_id_val = result.get("doctor_id")
+    department_id_val = result.get("department_id")
+
+    if new_status == "submitted":
+        await manager.broadcast("pharmacy", status_event)
+        await manager.broadcast("auditor", status_event)
+    elif new_status == "pending_amendment":
+        rooms = ["auditor"]
+        if doctor_id_val:
+            rooms.append(f"doctor:{str(doctor_id_val)}")
+        await manager.broadcast_multi(rooms, status_event)
+    elif new_status == "flagged":
+        rooms = ["pharmacy", "auditor"]
+        if doctor_id_val:
+            rooms.append(f"doctor:{str(doctor_id_val)}")
+        await manager.broadcast_multi(rooms, status_event)
+    elif new_status == "verified":
+        rooms = ["pharmacy"]
+        if department_id_val:
+            rooms.append(f"ward:{str(department_id_val)}")
+        await manager.broadcast_multi(rooms, status_event)
+    elif new_status == "dispensed":
+        rooms = []
+        if department_id_val:
+            rooms.append(f"ward:{str(department_id_val)}")
+        if doctor_id_val:
+            rooms.append(f"doctor:{str(doctor_id_val)}")
+        await manager.broadcast_multi(rooms, status_event)
+    elif new_status == "administered":
+        rooms = ["pharmacy"]
+        if doctor_id_val:
+            rooms.append(f"doctor:{str(doctor_id_val)}")
+        await manager.broadcast_multi(rooms, status_event)
+
+    return _doc_to_prescription(result)
+
+
+async def add_flag(
+    db: AsyncDatabase,
+    prescription_id: str,
+    flag: str,
+    ip_address: Optional[str] = None,
+    user_agent: Optional[str] = None,
+) -> Optional[PrescriptionInDB]:
+    try:
+        obj_id = ObjectId(prescription_id)
+    except Exception:
+        return None
+
+    now = datetime.now(timezone.utc)
+    result = await db.prescriptions.find_one_and_update(
+        {"_id": obj_id},
+        {
+            "$addToSet": {"flags": flag},
+            "$set": {"status": PrescriptionStatus.flagged.value, "updated_at": now},
+        },
+        return_document=True,
+    )
+    if not result:
+        return None
+
+    flag_event = {
+        "event_type": "audit.flag_created",
+        "entity_id": prescription_id,
+        "entity_type": "prescription",
+        "message": f"Flag added to prescription: {flag}",
+        "data": {"flag": flag},
+        "timestamp": now.isoformat(),
+        "triggered_by_role": "system",
+    }
+    doctor_id_val = result.get("doctor_id")
+    rooms = ["pharmacy", "auditor"]
+    if doctor_id_val:
+        rooms.append(f"doctor:{str(doctor_id_val)}")
+    await manager.broadcast_multi(rooms, flag_event)
+
+    return _doc_to_prescription(result)
+
+
+def run_automated_checks(prescription: dict) -> List[dict]:
+    issues: List[dict] = []
+    medications = prescription.get("medications", [])
+    for med in medications:
+        if isinstance(med, dict):
+            dose_str = med.get("dose", "")
+            name = med.get("name", "")
+            duration = med.get("duration_days", 0)
+        else:
+            dose_str = med.dose
+            name = med.name
+            duration = med.duration_days
+
+        numbers = re.findall(r"\d+(?:\.\d+)?", dose_str)
+        for num_str in numbers:
+            val = float(num_str)
+            unit_lower = dose_str.lower()
+            # Only flag numeric doses above 2000 mg, or above 500 for mcg/microgram
+            # to reduce false positives on normal clinical doses
+            is_high = (
+                (val > 2000 and ("mg" in unit_lower or not any(u in unit_lower for u in ["mcg", "microgram", "unit", "iu"])))
+                or (val > 500 and any(u in unit_lower for u in ["mcg", "microgram"]))
+            )
+            if is_high:
+                issues.append({
+                    "issue": f"High dose detected: {dose_str} for {name}",
+                    "severity": "high",
+                    "recommendation": "Verify dosage with prescribing physician before dispensing",
+                    "flag_code": "high_dose",
+                })
+                break
+
+        if duration > 30:
+            issues.append({
+                "issue": f"Extended duration: {duration} days for {name}",
+                "severity": "medium",
+                "recommendation": "Confirm extended duration is clinically appropriate",
+                "flag_code": "extended_duration",
+            })
+
+    return issues
