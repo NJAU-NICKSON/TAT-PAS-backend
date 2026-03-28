@@ -477,9 +477,13 @@ async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
             rx_dispensed_at    = earliest(r.get("dispensed_at")    for r in rxs)
             rx_administered_at = earliest(r.get("administered_at") for r in rxs)
 
-    # Fallback: if consultation ended and prescription was submitted, use
-    # consultation_ended_at as the audit start if submitted_at is missing
-    audit_start = rx_submitted_at or _naive(visit.consultation_ended_at)
+    # Prescription audit can only begin after the doctor ends the consultation.
+    # If consultation has not ended yet, the audit stage must remain Pending.
+    consultation_ended = _naive(visit.consultation_ended_at)
+    if consultation_ended is None:
+        audit_start = None
+    else:
+        audit_start = rx_submitted_at or consultation_ended
 
     stages = [
         {

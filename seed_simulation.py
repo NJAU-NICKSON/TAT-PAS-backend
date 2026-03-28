@@ -505,7 +505,15 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
         source = sources[idx]
         priority = priorities[idx]
         sla_thresh = sla_map.get(priority, 120)
-        ordered_at = vis["registered_at"] + timedelta(minutes=30)
+        # Prescription is ordered by the doctor — must be AFTER consultation starts.
+        if "consultation_ended_at" in vis:
+            ordered_at = vis["consultation_ended_at"]
+        elif "consultation_started_at" in vis:
+            ordered_at = vis["consultation_started_at"] + timedelta(minutes=25)
+        elif "triaged_at" in vis:
+            ordered_at = vis["triaged_at"] + timedelta(minutes=60)
+        else:
+            ordered_at = vis["registered_at"] + timedelta(minutes=90)
 
         # Flags
         flags = []

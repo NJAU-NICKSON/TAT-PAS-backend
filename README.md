@@ -1,8 +1,6 @@
 # TAT-PAS Backend
 
-FastAPI application that powers the TAT-PAS hospital system.
-
-Handles authentication, patient and visit management, prescription pipeline, pharmacy audit, billing, SLA monitoring, real-time WebSocket events, and analytics.
+FastAPI backend for the **Turn-Around Time and Prescription Audit System (TAT-PAS)** — a hospital information system that tracks patient journey TAT, automates prescription safety audits, monitors SLA compliance, and surfaces bottleneck analytics.
 
 ## Requirements
 
@@ -16,7 +14,8 @@ python -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 cp .env.example .env            # fill in values (see below)
-python setup_db.py              # run once — creates collections and seeds reference data
+python setup_db.py              # run once — creates collections, indexes, and reference data
+python seed_simulation.py       # seed demo data (use --fresh to wipe and re-seed)
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -57,6 +56,8 @@ app/
 ├── ws/             WebSocket connection manager and router
 ├── config.py       Settings loaded from .env via Pydantic
 └── main.py         App factory, CORS, lifespan, middleware
+seed_simulation.py  Standalone demo data seeder (20 patients, 30 visits, 30 prescriptions, 25 audit records)
+setup_db.py         One-time DB initialisation (collections, indexes, reference data)
 ```
 
 ## API routes
@@ -66,15 +67,15 @@ app/
 | `/api/v1/auth` | Login, logout, token refresh, password change |
 | `/api/v1/users` | User management (admin only) |
 | `/api/v1/patients` | Patient CRUD and search |
-| `/api/v1/visits` | Visit lifecycle and status transitions |
-| `/api/v1/prescriptions` | Prescription pipeline |
+| `/api/v1/visits` | Visit lifecycle, status transitions, patient journey TAT |
+| `/api/v1/prescriptions` | Prescription pipeline — create, submit, verify, dispense, administer |
 | `/api/v1/bills` | Billing, payments, revenue summary |
 | `/api/v1/departments` | Department management |
 | `/api/v1/beds` | Bed availability and assignment |
 | `/api/v1/audits` | Audit records and countersign workflow |
-| `/api/v1/analytics` | TAT metrics, SLA compliance, bottlenecks |
+| `/api/v1/analytics` | TAT metrics, SLA compliance, bottleneck identification |
 | `/api/v1/sla` | SLA configuration per prescription priority |
-| `/ws` | WebSocket — role-based rooms |
+| `/ws` | WebSocket — role-based real-time events |
 
 ## Roles
 
@@ -82,11 +83,27 @@ app/
 |---|---|
 | `admin` | Full system access |
 | `receptionist` | Register patients, create visits |
-| `nurse` | Triage, ward management, bed assignment |
+| `nurse` | Triage, ward management, drug administration |
 | `doctor` | Consultations, write prescriptions |
 | `pharmacist` | Verify and dispense prescriptions |
 | `billing` | Create bills, record payments |
-| `auditor` | Review prescriptions, manage audit records |
+| `auditor` | Review prescriptions, manage audit records, countersign |
+
+## Patient journey stages
+
+The system tracks TAT across 7 sequential stages per visit. Each stage only activates after the previous one completes — the prescription audit cannot begin before the doctor ends the consultation.
+
+| Stage | Name | Role | Target |
+|---|---|---|---|
+| 1 | Registration | Receptionist | 10 min |
+| 2 | Triage | Nurse | 15 min |
+| 3 | Doctor Consultation | Doctor | 30 min |
+| 4 | Prescription Audit | Auditor | 30 min |
+| 5 | Pharmacy Dispensing | Pharmacist | 20 min |
+| 6 | Drug Administration | Nurse | 15 min |
+| 7 | Billing | Billing | 15 min |
+
+Total target TAT: **130 minutes**
 
 ## Prescription audit flags
 
@@ -126,7 +143,7 @@ Connect to `ws://localhost:8000/ws`. Send the JWT in the first message — not i
 }
 ```
 
-The server sends `{"type":"ping"}` every 25 seconds. The server keeps separate rooms per role: `pharmacy`, `auditor`, `billing`, `receptionist`, `doctor:<id>`, `ward:<department_id>`.
+The server sends `{"type":"ping"}` every 25 seconds. Role-based rooms: `pharmacy`, `auditor`, `billing`, `receptionist`, `doctor:<id>`, `ward:<department_id>`.
 
 ## Database setup
 
@@ -140,6 +157,19 @@ The server sends `{"type":"ping"}` every 25 seconds. The server keeps separate r
 
 Safe to re-run — it updates existing documents rather than dropping collections.
 
+`seed_simulation.py` populates demo data for development and system demonstrations:
+
+- 10 staff users (admin, receptionist, 3 doctors, 3 nurses, pharmacist, auditor, billing)
+- 20 patients with realistic demographics, allergies, and chronic conditions
+- 30 visits across all status stages
+- 30 prescriptions covering all pipeline statuses and audit flag scenarios
+- 25 audit records (critical / high / medium / low severity)
+
+```bash
+python seed_simulation.py           # seed only if collections are empty
+python seed_simulation.py --fresh   # wipe all data and re-seed
+```
+
 ## SLA thresholds (pharmacy TAT)
 
 | Priority | Target |
@@ -147,12 +177,6 @@ Safe to re-run — it updates existing documents rather than dropping collection
 | STAT | 15 minutes |
 | Urgent | 30 minutes |
 | Routine | 60 minutes |
-
-## Running tests
-
-```bash
-pytest tests/
-```
 
 ## Production
 
