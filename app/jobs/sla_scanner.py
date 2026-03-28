@@ -49,8 +49,8 @@ async def scan_chemo_slas(db: AsyncDatabase):
     await _scan_priority(db, "chemo")
 
 async def _scan_priority(db: AsyncDatabase, priority: str):
-    threshold_min = await _get_threshold(db, priority)
     """Detect SLA warnings and breaches for a given priority."""
+    threshold_min = await _get_threshold(db, priority)
     now = datetime.now(timezone.utc)
     warning_cutoff = now - timedelta(minutes=threshold_min * _WARNING_FRACTION)
     breach_cutoff = now - timedelta(minutes=threshold_min)

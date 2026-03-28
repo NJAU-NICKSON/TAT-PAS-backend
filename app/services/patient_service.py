@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone, date
 from typing import Optional, List
 from bson import ObjectId
@@ -117,7 +118,8 @@ async def search_patients(
     filter_query: dict = {}
 
     if query:
-        regex = {"$regex": query, "$options": "i"}
+        escaped = re.escape(query.strip())
+        regex = {"$regex": escaped, "$options": "i"}
         filter_query["$or"] = [
             {"first_name": regex},
             {"last_name": regex},
@@ -339,7 +341,7 @@ async def get_patients_with_allergies(
     limit: int = 50,
 ) -> List[PatientResponse]:
     cursor = db.patients.find(
-        {"allergies": {"$exists": True, "$ne": [], "$ne": None}}
+        {"allergies": {"$exists": True, "$not": {"$size": 0}, "$ne": None}}
     ).sort([("last_name", 1)]).skip(skip).limit(limit)
 
     docs = await cursor.to_list(length=limit)

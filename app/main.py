@@ -1,6 +1,8 @@
 from contextlib import asynccontextmanager
-import traceback
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 from fastapi import Depends, FastAPI, Request, status, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,22 +29,22 @@ async def lifespan(app: FastAPI):
     db = await get_database()
     try:
         await db.command("ping")
-        print("MongoDB connected successfully")
+        logger.info("MongoDB connected successfully")
     except Exception as e:
-        print(f"MongoDB connection error: {e}")
+        logger.error("MongoDB connection error: %s", e)
 
     await create_indexes(db)
     try:
         await start_scheduler()
     except Exception as e:
-        print(f"Scheduler start error: {e}")
+        logger.error("Scheduler start error: %s", e)
 
     yield
 
     try:
         await stop_scheduler()
     except Exception as e:
-        print(f"Scheduler stop error: {e}")
+        logger.error("Scheduler stop error: %s", e)
     await close_db()
 
 
@@ -60,8 +62,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization"],
 )
 
 app.include_router(auth.router, prefix="/api/v1")
@@ -113,8 +115,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
-    print(f"Unhandled exception: {exc}")
-    traceback.print_exc()
+    logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An internal error occurred", "code": "INTERNAL_ERROR"},

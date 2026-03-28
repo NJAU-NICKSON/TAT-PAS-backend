@@ -1,8 +1,13 @@
 import json
 import asyncio
+import logging
+from bson import ObjectId
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, status
 from app.security.jwt import decode_token
+from app.db.client import get_database
 from app.ws.manager import manager
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -36,7 +41,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    # ── Step 2: validate token ───────────────────────────────────────
+    # ── Step 2: validate token and confirm user still exists in DB ───
     try:
         payload = decode_token(frame["token"])
         if payload.get("type") != "access":
@@ -46,6 +51,11 @@ async def websocket_endpoint(websocket: WebSocket):
         department_id = payload.get("department_id")
         if not user_id or not role:
             raise ValueError("missing sub or role")
+
+        db = await get_database()
+        user_doc = await db.users.find_one({"_id": ObjectId(user_id)})
+        if not user_doc:
+            raise ValueError("user not found")
     except Exception:
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
@@ -68,10 +78,11 @@ async def websocket_endpoint(websocket: WebSocket):
     else:
         room = "general"
 
-    # Register without calling accept() again
-    if room not in manager.active_connections:
-        manager.active_connections[room] = []
-    manager.active_connections[room].append(websocket)
+    # Register into the manager using the lock — avoids race conditions
+    async with manager._lock:
+        if room not in manager.active_connections:
+            manager.active_connections[room] = []
+        manager.active_connections[room].append(websocket)
 
     # ── Step 4: confirm auth ─────────────────────────────────────────
     try:
