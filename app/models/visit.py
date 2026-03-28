@@ -146,7 +146,7 @@ class VisitInDB(VisitBase):
     billing_completed_at: Optional[datetime] = None
     discharged_at: Optional[datetime] = None
     created_at: datetime
-    updated_at: datetime
+    updated_at: Optional[datetime] = None
 
 
 class VisitResponse(VisitInDB):
