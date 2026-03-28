@@ -451,7 +451,7 @@ async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
     now = datetime.utcnow()
     end = _naive(visit.discharged_at) or now
 
-    # ── Pull prescription timestamps for this visit ──────────────────────────
+    # Pull prescription timestamps for this visit
     rx_submitted_at   = None
     rx_verified_at    = None
     rx_dispensed_at   = None

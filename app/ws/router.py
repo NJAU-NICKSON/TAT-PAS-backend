@@ -29,7 +29,7 @@ async def websocket_endpoint(websocket: WebSocket):
     """
     await websocket.accept()
 
-    # ── Step 1: read auth frame ──────────────────────────────────────
+    # Step 1: read auth frame
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
         frame = json.loads(raw)
@@ -41,7 +41,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    # ── Step 2: validate token and confirm user still exists in DB ───
+    # Step 2: validate token and confirm user still exists in DB
     try:
         payload = decode_token(frame["token"])
         if payload.get("type") != "access":
@@ -60,7 +60,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
-    # ── Step 3: assign room ──────────────────────────────────────────
+    # Step 3: assign room
     if role == "pharmacist":
         room = "pharmacy"
     elif role == "auditor":
@@ -84,14 +84,14 @@ async def websocket_endpoint(websocket: WebSocket):
             manager.active_connections[room] = []
         manager.active_connections[room].append(websocket)
 
-    # ── Step 4: confirm auth ─────────────────────────────────────────
+    # Step 4: confirm auth
     try:
         await websocket.send_text(json.dumps({"type": "auth_ok", "room": room}))
     except Exception:
         await manager.disconnect(websocket, room)
         return
 
-    # ── Step 5: message loop with periodic ping ──────────────────────
+    # Step 5: message loop with periodic ping
     async def _ping_loop():
         while True:
             await asyncio.sleep(PING_INTERVAL)

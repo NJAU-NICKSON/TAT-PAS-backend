@@ -471,7 +471,7 @@ COLLECTIONS = {
         "indexes": [],
     },
 
-    # ── Reference data collections ───────────────────────────────────────────
+    # Reference data collections
 
     "sla_config": {
         "validator": {

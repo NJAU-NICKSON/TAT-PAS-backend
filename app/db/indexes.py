@@ -14,7 +14,7 @@ async def create_indexes(db: AsyncDatabase) -> None:
                 return True
         return False
 
-    # ----- Users -----
+    # Users
     collection = db.users
     if not await index_exists(collection, [("username", ASCENDING)]):
         await collection.create_index("username", unique=True)
@@ -25,7 +25,7 @@ async def create_indexes(db: AsyncDatabase) -> None:
     if not await index_exists(collection, [("department_id", ASCENDING)]):
         await collection.create_index("department_id", sparse=True)
 
-    # ----- Departments -----
+    # Departments
     collection = db.departments
     if not await index_exists(collection, [("code", ASCENDING)]):
         await collection.create_index("code", unique=True)
@@ -38,7 +38,7 @@ async def create_indexes(db: AsyncDatabase) -> None:
     if not await index_exists(collection, [("accepts_emergency", ASCENDING)]):
         await collection.create_index("accepts_emergency")
 
-    # ----- Beds -----
+    # Beds
     collection = db.beds
     if not await index_exists(collection, [("department_id", ASCENDING)]):
         await collection.create_index("department_id")
@@ -53,7 +53,7 @@ async def create_indexes(db: AsyncDatabase) -> None:
     if not await index_exists(collection, [("current_patient_id", ASCENDING)]):
         await collection.create_index("current_patient_id", sparse=True)
 
-    # ----- Patients -----
+    # Patients
     collection = db.patients
     if not await index_exists(collection, [("mrn", ASCENDING)]):
         await collection.create_index("mrn", unique=True)
@@ -77,7 +77,7 @@ async def create_indexes(db: AsyncDatabase) -> None:
     except Exception as e:
         print(f"Warning: could not create text index on patients: {e}")
 
-    # ----- Prescriptions -----
+    # Prescriptions
     collection = db.prescriptions
     if not await index_exists(collection, [("patient_id", ASCENDING)]):
         await collection.create_index("patient_id")
@@ -102,7 +102,7 @@ async def create_indexes(db: AsyncDatabase) -> None:
     if not await index_exists(collection, [("priority", ASCENDING), ("submitted_at", ASCENDING)]):
         await collection.create_index([("priority", ASCENDING), ("submitted_at", ASCENDING)])
 
-    # ----- Audit Records -----
+    # Audit Records
     collection = db.audit_records
     if not await index_exists(collection, [("prescription_id", ASCENDING)]):
         await collection.create_index("prescription_id")
@@ -127,17 +127,17 @@ async def create_indexes(db: AsyncDatabase) -> None:
     if not await index_exists(collection, [("is_security_event", ASCENDING), ("reviewed_at", ASCENDING)]):
         await collection.create_index([("is_security_event", ASCENDING), ("reviewed_at", ASCENDING)])
 
-    # ----- SLA Config -----
+    # SLA Config
     collection = db.sla_config
     if not await index_exists(collection, [("priority", ASCENDING)]):
         await collection.create_index("priority", unique=True)
 
-    # ----- Daily Reports -----
+    # Daily Reports
     collection = db.daily_reports
     if not await index_exists(collection, [("date", ASCENDING)]):
         await collection.create_index([("date", ASCENDING)], unique=True)
 
-    # ----- Visits -----
+    # Visits
     collection = db.visits
     if not await index_exists(collection, [("visit_number", ASCENDING)]):
         await collection.create_index("visit_number", unique=True, name="visits_number_unique")
@@ -154,7 +154,7 @@ async def create_indexes(db: AsyncDatabase) -> None:
     if not await index_exists(collection, [("assigned_doctor_id", ASCENDING)]):
         await collection.create_index("assigned_doctor_id", sparse=True, name="visits_doctor")
 
-    # ----- Bills -----
+    # Bills
     collection = db.bills
     if not await index_exists(collection, [("visit_id", ASCENDING)]):
         await collection.create_index("visit_id", unique=True, name="bills_visit_unique")
