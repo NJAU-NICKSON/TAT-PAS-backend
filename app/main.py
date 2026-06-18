@@ -1,9 +1,8 @@
 from contextlib import asynccontextmanager
-import logging
 from datetime import datetime, timezone
+import logging
 
-logger = logging.getLogger(__name__)
-from fastapi import Depends, FastAPI, Request, status, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -19,10 +18,14 @@ from app.jobs.scheduler import start_scheduler, stop_scheduler, scheduler
 from app.security.rbac import Roles, require_roles
 from app.ws import router as ws_router
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 limiter = Limiter(key_func=get_remote_address)
 
+SERVER_STARTED_AT = datetime.now(timezone.utc)
 
+
+# Start and stop app resources (DB, scheduler).
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_db()
@@ -80,7 +83,7 @@ app.include_router(sla.router, prefix="/api/v1")
 app.include_router(consultation_rooms.router, prefix="/api/v1")
 app.include_router(ws_router.router, prefix="")
 
-
+# Return 429 when a rate limit is hit.
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(
@@ -88,7 +91,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         content={"detail": "Too many requests", "code": "RATE_LIMIT_EXCEEDED"}
     )
 
-
+# Format request-validation errors as JSON.
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = exc.errors()
@@ -105,6 +108,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
+# Normalise HTTP error responses.
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
@@ -112,7 +116,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         content={"detail": exc.detail},
     )
 
-
+# Catch-all handler for unexpected errors.
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
@@ -121,36 +125,40 @@ async def general_exception_handler(request: Request, exc: Exception):
         content={"detail": "An internal error occurred", "code": "INTERNAL_ERROR"},
     )
 
-
+# Redirect the root path to the API docs.
 @app.get("/", include_in_schema=False)
 async def root_redirect():
     return RedirectResponse(url="/docs")
 
-
+# Detailed health check.
 @app.get("/api/v1/admin/health", tags=["admin"])
 async def health_check(
     request: Request,
     full: bool = False,
     current_user=Depends(require_roles(Roles.admin)),
 ):
-    """
-    Detailed health check.
-    - Database status
-    - Scheduler status (placeholder)
-    - Per‑module route counts – instantly see if any module has 0 routes
-    - Unexpected routes (those not matching known modules)
-    - Optional full route list when ?full=true
-    """
     db_status = "ok"
+    db_latency_ms = None
+    collection_counts: dict = {}
+    db = None
     try:
         db = await get_database()
+        _ping_start = datetime.now(timezone.utc)
         await db.command("ping")
+        db_latency_ms = round((datetime.now(timezone.utc) - _ping_start).total_seconds() * 1000, 1)
     except Exception:
         db_status = "error"
 
+    if db is not None and db_status == "ok":
+        for coll in ("users", "patients", "visits", "prescriptions",
+                     "audit_records", "beds", "consultation_rooms", "departments", "bills"):
+            try:
+                collection_counts[coll] = await db[coll].count_documents({})
+            except Exception:
+                collection_counts[coll] = None
+
     scheduler_status = "ok" if scheduler.running else "stopped"
 
-    # Define expected modules and their prefixes
     expected_modules = {
         "auth": "/api/v1/auth",
         "users": "/api/v1/users",
@@ -161,13 +169,16 @@ async def health_check(
         "departments": "/api/v1/departments",
         "beds": "/api/v1/beds",
         "visits": "/api/v1/visits",
-        "websocket": "",  
+        "billing": "/api/v1/bills",
+        "sla": "/api/v1/sla",
+        "consultation_rooms": "/api/v1/consultation-rooms",
+        "websocket": "/ws",
     }
 
     module_counts = {name: 0 for name in expected_modules}
     unexpected_routes = []
-    all_routes = []  
-    
+    all_routes = []
+
     for route in request.app.routes:
         path = getattr(route, "path", None)
         if not path:
@@ -207,10 +218,19 @@ async def health_check(
     elif any(count == 0 for count in module_counts.values()):
         overall_status = "degraded"
 
+    now = datetime.now(timezone.utc)
+    uptime_seconds = round((now - SERVER_STARTED_AT).total_seconds())
+
     response = {
         "status": overall_status,
-        "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+        "timestamp": now.replace(tzinfo=None).isoformat(),
+        "version": app.version,
+        "uptime_seconds": uptime_seconds,
+        "started_at": SERVER_STARTED_AT.replace(tzinfo=None).isoformat(),
         "database": db_status,
+        "database_latency_ms": db_latency_ms,
+        "database_name": settings.MONGO_DB,
+        "collection_counts": collection_counts,
         "scheduler": scheduler_status,
         "modules": module_counts,
         "unexpected_routes_count": len(unexpected_routes),

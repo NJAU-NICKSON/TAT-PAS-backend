@@ -143,6 +143,9 @@ COLLECTIONS = {
                     "first_name": {"bsonType": "string", "minLength": 1, "maxLength": 100},
                     "last_name":  {"bsonType": "string", "minLength": 1, "maxLength": 100},
                     "middle_name":{"bsonType": ["string", "null"]},
+                    "national_id":         {"bsonType": ["string", "null"]},
+                    "guardian_national_id":{"bsonType": ["string", "null"]},
+                    "guardian_name":       {"bsonType": ["string", "null"]},
                     "dob":        {"bsonType": ["date", "null"]},
                     "gender":     {"bsonType": ["string", "null"], "enum": ["male", "female", "other", None]},
                     "blood_group":{"bsonType": ["string", "null"], "enum": ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", "unknown", None]},
@@ -167,6 +170,8 @@ COLLECTIONS = {
         "validationAction": "error",
         "indexes": [
             {"keys": [("mrn", ASCENDING)],                                  "options": {"unique": True, "name": "patients_mrn_unique"}},
+            {"keys": [("national_id", ASCENDING)],                          "options": {"unique": True, "sparse": True, "name": "patients_national_id_unique"}},
+            {"keys": [("guardian_national_id", ASCENDING)],                 "options": {"sparse": True, "name": "patients_guardian_id"}},
             {"keys": [("last_name", ASCENDING), ("first_name", ASCENDING)], "options": {"name": "patients_name"}},
             {"keys": [("contact.phone", ASCENDING)],                        "options": {"name": "patients_phone", "sparse": True}},
             {"keys": [("dob", ASCENDING)],                                  "options": {"name": "patients_dob", "sparse": True}},
@@ -431,7 +436,7 @@ COLLECTIONS = {
                             "required": ["amount", "method", "received_at"],
                             "properties": {
                                 "amount":           {"bsonType": "number"},
-                                "method":           {"bsonType": "string", "enum": ["cash", "card", "insurance", "mobile_money", "nhif", "mpesa"]},
+                                "method":           {"bsonType": "string", "enum": ["cash", "card", "insurance", "mobile_money", "sha", "nhif", "mpesa"]},
                                 "reference_number": {"bsonType": ["string", "null"]},
                                 "received_by":      {"bsonType": ["string", "null"]},
                                 "received_at":      {"bsonType": "date"},
@@ -471,7 +476,6 @@ COLLECTIONS = {
         "indexes": [],
     },
 
-    # Reference data collections
 
     "sla_config": {
         "validator": {
@@ -670,6 +674,7 @@ SEED_DATA = {
 }
 
 
+# Create a collection if it doesn't exist.
 def create_collection(db, name: str, spec: dict) -> None:
     validator        = spec.get("validator")
     validation_level = spec.get("validationLevel", "moderate")
@@ -678,13 +683,14 @@ def create_collection(db, name: str, spec: dict) -> None:
         db.create_collection(name, validator=validator, validationLevel=validation_level, validationAction=validation_action)
         print(f"  [CREATED] {name}")
     except CollectionInvalid:
-        print(f"  [EXISTS]  {name} — updating validator")
+        print(f"  [EXISTS]  {name} - updating validator")
         try:
             db.command("collMod", name, validator=validator, validationLevel=validation_level, validationAction=validation_action)
         except OperationFailure as exc:
             print(f"  [WARN]    could not update validator for '{name}': {exc}")
 
 
+# Create all database indexes.
 def create_indexes(db, name: str, indexes: list) -> None:
     for idx in indexes:
         try:
@@ -695,6 +701,7 @@ def create_indexes(db, name: str, indexes: list) -> None:
             print(f"  [WARN]    index on {name} failed: {exc}")
 
 
+# Insert baseline reference data.
 def seed_reference_data(db) -> None:
     print("\n--- Reference Data ---")
     for collection_name, data in SEED_DATA.items():
@@ -705,6 +712,7 @@ def seed_reference_data(db) -> None:
         print(f"  [SEED]  {collection_name}: {len(result.inserted_ids)} documents")
 
 
+# Initialise collections, indexes, and reference data.
 def setup(db) -> None:
     print(f"\nSetting up: {MONGO_DB}\n")
     for name, spec in COLLECTIONS.items():

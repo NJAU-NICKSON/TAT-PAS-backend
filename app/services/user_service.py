@@ -6,6 +6,7 @@ from app.models.user import UserCreate, UserInDB, UserResponse, UserUpdate
 from app.security.passwords import hash_password
 
 
+# Convert a user document to the API response model.
 def _doc_to_user_response(doc: dict) -> UserResponse:
     return UserResponse(
         id=str(doc["_id"]),
@@ -13,24 +14,31 @@ def _doc_to_user_response(doc: dict) -> UserResponse:
         full_name=doc["full_name"],
         email=doc["email"],
         role=doc["role"],
+        is_active=doc.get("is_active", True),
         created_at=doc["created_at"],
         last_login=doc.get("last_login"),
     )
 
 
+# Convert a user document to the internal model.
 def _doc_to_user_in_db(doc: dict) -> UserInDB:
     doc["id"] = str(doc["_id"])
     return UserInDB(**doc)
 
 
+# List users, optionally filtered by role.
 async def get_users(
-    db: AsyncDatabase, skip: int = 0, limit: int = 20
+    db: AsyncDatabase, skip: int = 0, limit: int = 20, role: Optional[str] = None
 ) -> list[UserResponse]:
-    cursor = db.users.find({}).skip(skip).limit(limit)
+    query: dict = {}
+    if role:
+        query["role"] = role
+    cursor = db.users.find(query).skip(skip).limit(limit)
     docs = await cursor.to_list(length=limit)
     return [_doc_to_user_response(doc) for doc in docs]
 
 
+# Fetch a user by ID.
 async def get_user_by_id(
     db: AsyncDatabase, user_id: str
 ) -> Optional[UserInDB]:
@@ -44,6 +52,7 @@ async def get_user_by_id(
     return _doc_to_user_in_db(doc)
 
 
+# Fetch a user by username.
 async def get_user_by_username(
     db: AsyncDatabase, username: str
 ) -> Optional[UserInDB]:
@@ -53,6 +62,7 @@ async def get_user_by_username(
     return _doc_to_user_in_db(doc)
 
 
+# Create a new staff account.
 async def create_user(
     db: AsyncDatabase, user_create: UserCreate
 ) -> UserResponse:
@@ -63,6 +73,7 @@ async def create_user(
         "email": user_create.email,
         "role": user_create.role,
         "password_hash": hash_password(user_create.password),
+        "is_active": True,
         "created_at": now,
         "last_login": None,
     }
@@ -71,6 +82,7 @@ async def create_user(
     return _doc_to_user_response(doc)
 
 
+# Update a user's fields.
 async def update_user(
     db: AsyncDatabase, user_id: str, update: UserUpdate
 ) -> Optional[UserResponse]:
@@ -98,6 +110,24 @@ async def update_user(
     result = await db.users.find_one_and_update(
         {"_id": obj_id},
         {"$set": update_fields},
+        return_document=True,
+    )
+    if not result:
+        return None
+    return _doc_to_user_response(result)
+
+
+# Soft-delete / restore a user by toggling is_active.
+async def set_user_active(
+    db: AsyncDatabase, user_id: str, is_active: bool
+) -> Optional[UserResponse]:
+    try:
+        obj_id = ObjectId(user_id)
+    except Exception:
+        return None
+    result = await db.users.find_one_and_update(
+        {"_id": obj_id},
+        {"$set": {"is_active": is_active}},
         return_document=True,
     )
     if not result:

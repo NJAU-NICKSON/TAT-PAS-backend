@@ -1,21 +1,23 @@
 from datetime import datetime, timezone
 from bson import ObjectId
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordRequestForm
 from pymongo.asynchronous.database import AsyncDatabase
 from slowapi import Limiter
 from slowapi.util import get_remote_address
 from app.db.client import get_database
-from app.models.user import LoginRequest, TokenResponse, UserInDB
-from app.security.jwt import decode_token, create_access_token, create_refresh_token
+from app.models.user import ChangePasswordRequest, TokenResponse, UserInDB, UserUpdate
+from app.security.jwt import decode_token
 from app.security.rbac import get_current_user
-from app.services.auth_service import authenticate_user, create_tokens
+from app.services.auth_service import authenticate_user, create_tokens, verify_password_for_user
+from app.services.user_service import update_user
 from app.services.audit_service import create_security_audit
 
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+# Authenticate and issue access + refresh tokens.
 @router.post("/login", response_model=TokenResponse)
 @limiter.limit("5/minute")
 async def login(
@@ -25,7 +27,6 @@ async def login(
 ):
     user = await authenticate_user(form_data.username, form_data.password, db)
     if not user:
-        # Log security event
         await create_security_audit(
             db=db,
             user_id="system",
@@ -48,6 +49,7 @@ async def login(
     return create_tokens(user)
 
 
+# Exchange a refresh token for a new access token.
 @router.post("/refresh", response_model=TokenResponse)
 @limiter.limit("30/minute")
 async def refresh_token(
@@ -96,14 +98,36 @@ async def refresh_token(
     return create_tokens(user)
 
 
+# Invalidate the current session.
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
     current_user=Depends(get_current_user),
 ):
-    """
-    Invalidate the current session.
-    Clients must clear their local token storage on receipt of this response.
-    Note: tokens remain cryptographically valid until expiry — for full revocation
-    implement a server-side token blacklist.
-    """
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+# Change the logged-in user's password.
+@router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
+async def change_password(
+    body: ChangePasswordRequest,
+    current_user=Depends(get_current_user),
+    db: AsyncDatabase = Depends(get_database),
+):
+    if not await verify_password_for_user(current_user.id, body.current_password, db):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect",
+        )
+
+    updated_user = await update_user(
+        db,
+        current_user.id,
+        UserUpdate(password=body.new_password),
+    )
+    if updated_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)

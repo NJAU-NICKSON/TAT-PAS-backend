@@ -9,6 +9,7 @@ from app.services.patient_service import get_patient_by_id
 from app.ws.manager import manager
 
 
+# Produce the next sequential bill number.
 async def generate_bill_number(db: AsyncDatabase) -> str:
     today = datetime.now(timezone.utc)
     prefix = f"BILL-{today.strftime('%Y%m%d')}"
@@ -16,8 +17,8 @@ async def generate_bill_number(db: AsyncDatabase) -> str:
     return f"{prefix}-{count + 1:04d}"
 
 
+# Batch-enrich bill docs with patient_name and visit_number.
 async def _enrich_docs(db: AsyncDatabase, docs: list) -> list:
-    """Batch-enrich bill docs with patient_name and visit_number."""
     pid_set = list({str(d.get("patient_id", "")) for d in docs if d.get("patient_id")})
     vid_set = list({str(d.get("visit_id", "")) for d in docs if d.get("visit_id")})
 
@@ -38,6 +39,7 @@ async def _enrich_docs(db: AsyncDatabase, docs: list) -> list:
     return docs
 
 
+# Create a bill for a visit.
 async def create_bill(
     db: AsyncDatabase,
     visit_id: str,
@@ -48,7 +50,6 @@ async def create_bill(
     if not visit:
         raise ValueError("Visit not found")
 
-    # Prevent duplicate bills for the same visit
     existing = await db.bills.find_one({"visit_id": visit_id})
     if existing:
         raise ValueError("A bill already exists for this visit")
@@ -92,6 +93,7 @@ async def create_bill(
     return created
 
 
+# List bills that are still open or partly paid.
 async def get_pending_bills(
     db: AsyncDatabase,
     limit: int = 50,
@@ -112,8 +114,8 @@ async def get_pending_bills(
     return [Bill.model_validate(doc) for doc in docs]
 
 
+# Get all bills regardless of status.
 async def get_all_bills(db: AsyncDatabase, limit: int = 100) -> List[Bill]:
-    """Get all bills regardless of status."""
     docs = []
     async for doc in db.bills.find({}).sort([("created_at", -1)]).limit(limit):
         docs.append(doc)
@@ -121,6 +123,7 @@ async def get_all_bills(db: AsyncDatabase, limit: int = 100) -> List[Bill]:
     return [Bill.model_validate(doc) for doc in docs]
 
 
+# Fetch a bill by ID.
 async def get_bill(db: AsyncDatabase, bill_id: str) -> Optional[Bill]:
     if not ObjectId.is_valid(bill_id):
         return None
@@ -131,6 +134,7 @@ async def get_bill(db: AsyncDatabase, bill_id: str) -> Optional[Bill]:
     return Bill.model_validate(docs[0])
 
 
+# Fetch the bill for a given visit.
 async def get_bill_by_visit(db: AsyncDatabase, visit_id: str) -> Optional[Bill]:
     doc = await db.bills.find_one({"visit_id": visit_id})
     if not doc:
@@ -139,6 +143,7 @@ async def get_bill_by_visit(db: AsyncDatabase, visit_id: str) -> Optional[Bill]:
     return Bill.model_validate(docs[0])
 
 
+# Update a bill's line items, status, or discount.
 async def update_bill(
     db: AsyncDatabase,
     bill_id: str,
@@ -166,7 +171,6 @@ async def update_bill(
         set_fields["discount_reason"] = update.discount_reason
     if update.tax_amount is not None:
         set_fields["tax_amount"] = update.tax_amount
-        # Recalculate total if tax changes
         current_subtotal = set_fields.get("subtotal", doc.get("subtotal", 0))
         current_discount = set_fields.get("discount_amount", doc.get("discount_amount", 0))
         set_fields["total_amount"] = round(current_subtotal - current_discount + update.tax_amount, 2)
@@ -177,6 +181,7 @@ async def update_bill(
     return Bill.model_validate(docs[0])
 
 
+# Record a payment and advance the patient when fully paid.
 async def add_payment(
     db: AsyncDatabase,
     bill_id: str,
@@ -193,10 +198,9 @@ async def add_payment(
 
     if payment.amount <= 0:
         raise ValueError("Payment amount must be greater than zero")
-    if payment.amount > bill.balance_due + 0.01:  # allow 1 cent rounding
+    if payment.amount > bill.balance_due + 0.01:
         raise ValueError(f"Payment amount ({payment.amount}) exceeds balance due ({bill.balance_due})")
 
-    # Set received_by if not provided
     if not payment.received_by:
         payment.received_by = updated_by
 
@@ -224,18 +228,24 @@ async def add_payment(
 
     await db.bills.update_one({"_id": ObjectId(bill_id)}, update_data)
 
-    # Stamp billing_completed_at on the visit when fully paid
     if new_status == "paid" and ObjectId.is_valid(str(bill.visit_id)):
+        now = datetime.now(timezone.utc)
         await db.visits.update_one(
-            {"_id": ObjectId(str(bill.visit_id))},
-            {"$set": {"billing_completed_at": datetime.now(timezone.utc), "updated_at": datetime.now(timezone.utc)}},
+            {
+                "_id": ObjectId(str(bill.visit_id)),
+                "status": {"$nin": ["discharged", "cancelled"]},
+            },
+            {"$set": {
+                "billing_completed_at": now,
+                "status": "ready_for_discharge",
+                "updated_at": now,
+            }},
         )
 
     updated_doc = await db.bills.find_one({"_id": ObjectId(bill_id)})
     enriched = await _enrich_docs(db, [updated_doc])
     result = Bill.model_validate(enriched[0])
 
-    # Broadcast WS notification
     await manager.broadcast("billing", {
         "event_type": "payment_recorded",
         "entity_id": bill_id,
@@ -254,6 +264,7 @@ async def add_payment(
     return result
 
 
+# Summarise revenue and collection over a date range.
 async def get_revenue_summary(
     db: AsyncDatabase,
     start_date: datetime,

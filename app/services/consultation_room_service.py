@@ -10,6 +10,7 @@ from app.models.consultation_room import (
 )
 
 
+# Turn a room document's ObjectIds into strings.
 def _serialize(doc: dict) -> dict:
     doc["id"] = str(doc.pop("_id"))
     if doc.get("department_id"):
@@ -17,19 +18,31 @@ def _serialize(doc: dict) -> dict:
     return doc
 
 
+# Attach department, doctor, nurse, and patient names to rooms.
 async def _enrich(db: AsyncDatabase, rooms: list[dict]) -> list[dict]:
     doctor_ids = {r["current_doctor_id"] for r in rooms if r.get("current_doctor_id")}
+    nurse_ids = {r["current_nurse_id"] for r in rooms if r.get("current_nurse_id")}
     patient_ids = {r["current_patient_id"] for r in rooms if r.get("current_patient_id")}
+    dept_ids = {r["department_id"] for r in rooms if r.get("department_id")}
 
-    doctor_map: dict[str, str] = {}
+    staff_ids = doctor_ids | nurse_ids
+    staff_map: dict[str, str] = {}
     patient_map: dict[str, str] = {}
+    dept_map: dict[str, str] = {}
 
-    if doctor_ids:
+    if dept_ids:
+        docs = await db.departments.find(
+            {"_id": {"$in": [ObjectId(i) for i in dept_ids if len(i) == 24]}},
+            {"_id": 1, "name": 1},
+        ).to_list(length=len(dept_ids))
+        dept_map = {str(d["_id"]): d.get("name", "") for d in docs}
+
+    if staff_ids:
         docs = await db.users.find(
-            {"_id": {"$in": [ObjectId(i) for i in doctor_ids if len(i) == 24]}},
+            {"_id": {"$in": [ObjectId(i) for i in staff_ids if len(i) == 24]}},
             {"_id": 1, "full_name": 1},
-        ).to_list(length=len(doctor_ids))
-        doctor_map = {str(d["_id"]): d.get("full_name", "") for d in docs}
+        ).to_list(length=len(staff_ids))
+        staff_map = {str(d["_id"]): d.get("full_name", "") for d in docs}
 
     if patient_ids:
         docs = await db.patients.find(
@@ -39,12 +52,15 @@ async def _enrich(db: AsyncDatabase, rooms: list[dict]) -> list[dict]:
         patient_map = {str(p["_id"]): f"{p.get('first_name','')} {p.get('last_name','')}".strip() for p in docs}
 
     for room in rooms:
-        room["current_doctor_name"] = doctor_map.get(room.get("current_doctor_id", ""))
+        room["department_name"] = dept_map.get(room.get("department_id", ""))
+        room["current_doctor_name"] = staff_map.get(room.get("current_doctor_id", ""))
+        room["current_nurse_name"] = staff_map.get(room.get("current_nurse_id", ""))
         room["current_patient_name"] = patient_map.get(room.get("current_patient_id", ""))
 
     return rooms
 
 
+# List consultation rooms, optionally filtered.
 async def get_all_rooms(
     db: AsyncDatabase,
     department_id: Optional[str] = None,
@@ -62,6 +78,7 @@ async def get_all_rooms(
     return [ConsultationRoomWithOccupants(**d) for d in docs]
 
 
+# Fetch one consultation room by ID.
 async def get_room_by_id(db: AsyncDatabase, room_id: str) -> Optional[ConsultationRoomWithOccupants]:
     if len(room_id) != 24:
         return None
@@ -73,6 +90,7 @@ async def get_room_by_id(db: AsyncDatabase, room_id: str) -> Optional[Consultati
     return ConsultationRoomWithOccupants(**docs[0])
 
 
+# Add a new consultation room.
 async def create_room(db: AsyncDatabase, data: ConsultationRoomCreate) -> ConsultationRoomWithOccupants:
     now = datetime.now(timezone.utc)
     doc = {
@@ -87,6 +105,7 @@ async def create_room(db: AsyncDatabase, data: ConsultationRoomCreate) -> Consul
     return ConsultationRoomWithOccupants(**docs[0])
 
 
+# Update a consultation room (status, occupants, notes).
 async def update_room(
     db: AsyncDatabase,
     room_id: str,
@@ -110,6 +129,7 @@ async def update_room(
     return ConsultationRoomWithOccupants(**docs[0])
 
 
+# Remove a consultation room.
 async def delete_room(db: AsyncDatabase, room_id: str) -> bool:
     if len(room_id) != 24:
         return False

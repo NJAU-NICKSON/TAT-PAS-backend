@@ -16,12 +16,14 @@ from app.services import patient_service
 router = APIRouter(prefix="/patients", tags=["patients"])
 
 
+# Request body to add/remove a patient allergy.
 class AllergyRequest(BaseModel):
     substance: str
     reaction_type: Optional[str] = None
     severity: str = "moderate"
 
 
+# Search or list patients.
 @router.get("", response_model=PatientSearchResult)
 async def list_patients(
     q: str = Query("", description="Search by name, MRN, or phone"),
@@ -44,6 +46,7 @@ async def list_patients(
     )
 
 
+# List all patients with paging.
 @router.get("/all", response_model=List[PatientResponse])
 async def get_all_patients(
     skip: int = Query(0, ge=0),
@@ -54,6 +57,7 @@ async def get_all_patients(
     return await patient_service.get_all_patients(db, skip=skip, limit=limit)
 
 
+# List paediatric patients.
 @router.get("/paediatric", response_model=List[PatientResponse])
 async def get_paediatric_patients(
     skip: int = Query(0, ge=0),
@@ -64,6 +68,7 @@ async def get_paediatric_patients(
     return await patient_service.get_paediatric_patients(db, skip=skip, limit=limit)
 
 
+# List pregnant patients.
 @router.get("/pregnant", response_model=List[PatientResponse])
 async def get_pregnant_patients(
     skip: int = Query(0, ge=0),
@@ -74,6 +79,7 @@ async def get_pregnant_patients(
     return await patient_service.get_pregnant_patients(db, skip=skip, limit=limit)
 
 
+# List neonatal patients.
 @router.get("/neonates", response_model=List[PatientResponse])
 async def get_neonates(
     skip: int = Query(0, ge=0),
@@ -84,6 +90,7 @@ async def get_neonates(
     return await patient_service.get_neonates(db, skip=skip, limit=limit)
 
 
+# List patients with recorded allergies.
 @router.get("/with-allergies", response_model=List[PatientResponse])
 async def get_patients_with_allergies(
     skip: int = Query(0, ge=0),
@@ -94,6 +101,7 @@ async def get_patients_with_allergies(
     return await patient_service.get_patients_with_allergies(db, skip=skip, limit=limit)
 
 
+# Fetch a patient by MRN.
 @router.get("/mrn/{mrn}", response_model=PatientResponse)
 async def get_patient_by_mrn(
     mrn: str,
@@ -109,6 +117,7 @@ async def get_patient_by_mrn(
     return patient
 
 
+# Fetch a patient by ID.
 @router.get("/{patient_id}", response_model=PatientResponse)
 async def get_patient(
     patient_id: str,
@@ -124,9 +133,11 @@ async def get_patient(
     return patient
 
 
+# Register a new patient.
 @router.post("", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
 async def create_new_patient(
     body: PatientCreate,
+    force: bool = Query(False, description="Register even if a possible duplicate exists"),
     current_user=Depends(require_roles(Roles.receptionist, Roles.admin, Roles.nurse)),
     db: AsyncDatabase = Depends(get_database),
 ):
@@ -137,9 +148,12 @@ async def create_new_patient(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="MRN already exists",
             )
-    return await patient_service.create_patient(db, body, registered_by=current_user.id)
+    return await patient_service.create_patient(
+        db, body, registered_by=current_user.id, force=force
+    )
 
 
+# Update a patient's details.
 @router.patch("/{patient_id}", response_model=PatientResponse)
 async def update_existing_patient(
     patient_id: str,
@@ -156,6 +170,7 @@ async def update_existing_patient(
     return updated
 
 
+# Add an allergy to a patient.
 @router.post("/{patient_id}/allergies", response_model=PatientResponse)
 async def add_patient_allergy(
     patient_id: str,
@@ -180,6 +195,7 @@ async def add_patient_allergy(
     return patient
 
 
+# Remove an allergy from a patient.
 @router.delete("/{patient_id}/allergies/{substance}", response_model=PatientResponse)
 async def remove_patient_allergy(
     patient_id: str,
@@ -198,6 +214,7 @@ async def remove_patient_allergy(
     return patient
 
 
+# Total patient count.
 @router.get("/count/total")
 async def get_patient_count(
     current_user=Depends(get_current_user),
@@ -207,6 +224,7 @@ async def get_patient_count(
     return {"total": count}
 
 
+# Count patients matching a filter.
 @router.get("/count/filtered")
 async def get_patient_count_filtered(
     is_paediatric: Optional[bool] = Query(None),

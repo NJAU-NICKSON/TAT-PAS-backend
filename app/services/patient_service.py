@@ -17,6 +17,7 @@ from app.models.patient import (
 )
 
 
+# Derive paediatric/neonate/adult flags from date of birth.
 def _compute_age_flags(dob: Optional[datetime]) -> tuple[bool, bool]:
     if not dob:
         return False, False
@@ -32,6 +33,7 @@ def _compute_age_flags(dob: Optional[datetime]) -> tuple[bool, bool]:
     return is_paediatric, is_neonate
 
 
+# Convert a patient document to the full model.
 def _doc_to_patient(doc: dict) -> PatientInDB:
     allergies = doc.get("allergies")
     if allergies:
@@ -46,6 +48,9 @@ def _doc_to_patient(doc: dict) -> PatientInDB:
         dob=doc.get("dob"),
         gender=doc.get("gender"),
         blood_group=doc.get("blood_group"),
+        national_id=doc.get("national_id"),
+        guardian_national_id=doc.get("guardian_national_id"),
+        guardian_name=doc.get("guardian_name"),
         contact=doc.get("contact"),
         emergency_contact=doc.get("emergency_contact"),
         allergies=allergies,
@@ -62,11 +67,13 @@ def _doc_to_patient(doc: dict) -> PatientInDB:
     )
 
 
+# Convert a patient document to the API response.
 def _doc_to_response(doc: dict) -> PatientResponse:
     patient = _doc_to_patient(doc)
     return PatientResponse(**patient.model_dump())
 
 
+# Convert a patient document to a list summary.
 def _doc_to_summary(doc: dict) -> PatientSummary:
     allergies = doc.get("allergies", []) or []
     return PatientSummary(
@@ -77,6 +84,9 @@ def _doc_to_summary(doc: dict) -> PatientSummary:
         dob=doc.get("dob"),
         gender=doc.get("gender"),
         blood_group=doc.get("blood_group"),
+        national_id=doc.get("national_id"),
+        guardian_national_id=doc.get("guardian_national_id"),
+        contact=doc.get("contact"),
         is_pregnant=doc.get("is_pregnant", False),
         is_paediatric=doc.get("is_paediatric", False),
         is_neonate=doc.get("is_neonate", False),
@@ -85,6 +95,7 @@ def _doc_to_summary(doc: dict) -> PatientSummary:
     )
 
 
+# Produce the next medical record number.
 async def generate_mrn(db: AsyncDatabase) -> str:
     today = datetime.now(timezone.utc)
     date_prefix = today.strftime("%Y%m%d")
@@ -101,11 +112,11 @@ async def generate_mrn(db: AsyncDatabase) -> str:
         mrn = f"MRN-{date_prefix}-{seq:04d}"
         if not await db.patients.find_one({"mrn": mrn}):
             return mrn
-        # MRN already taken (counter out of sync) — advance and try next
 
-    raise ValueError("Could not generate a unique MRN — too many patients registered today")
+    raise ValueError("Could not generate a unique MRN - too many patients registered today")
 
 
+# Search patients by name, MRN, phone, or ID.
 async def search_patients(
     db: AsyncDatabase,
     query: str = "",
@@ -151,6 +162,7 @@ async def search_patients(
     )
 
 
+# List patients with paging.
 async def get_all_patients(
     db: AsyncDatabase,
     skip: int = 0,
@@ -161,6 +173,7 @@ async def get_all_patients(
     return [_doc_to_response(doc) for doc in docs]
 
 
+# Fetch a patient by ID.
 async def get_patient_by_id(
     db: AsyncDatabase, patient_id: str
 ) -> Optional[PatientResponse]:
@@ -175,6 +188,7 @@ async def get_patient_by_id(
     return _doc_to_response(doc)
 
 
+# Fetch a patient by MRN.
 async def get_patient_by_mrn(
     db: AsyncDatabase, mrn: str
 ) -> Optional[PatientResponse]:
@@ -185,12 +199,82 @@ async def get_patient_by_mrn(
     return _doc_to_response(doc)
 
 
+# Return an existing patient with the same National ID, or None.
+async def find_id_duplicate(
+    db: AsyncDatabase, patient: PatientCreate
+) -> Optional[dict]:
+    if patient.national_id and patient.national_id.strip():
+        return await db.patients.find_one({"national_id": patient.national_id.strip()})
+    return None
+
+
+# Return an existing patient that looks like the same person, or None.
+async def find_potential_duplicate(
+    db: AsyncDatabase, patient: PatientCreate
+) -> Optional[dict]:
+    or_clauses: list[dict] = []
+
+    if patient.first_name and patient.last_name:
+        name_dob: dict = {
+            "first_name": {"$regex": f"^{re.escape(patient.first_name.strip())}$", "$options": "i"},
+            "last_name": {"$regex": f"^{re.escape(patient.last_name.strip())}$", "$options": "i"},
+        }
+        if patient.dob:
+            name_dob["dob"] = patient.dob
+        or_clauses.append(name_dob)
+
+    phone = patient.contact.phone if patient.contact else None
+    if phone and phone.strip():
+        or_clauses.append({"contact.phone": phone.strip()})
+
+    if not or_clauses:
+        return None
+
+    return await db.patients.find_one({"$or": or_clauses})
+
+
+# Register a new patient, guarding against duplicates.
 async def create_patient(
     db: AsyncDatabase,
     patient: PatientCreate,
     registered_by: Optional[str] = None,
+    force: bool = False,
 ) -> PatientResponse:
     now = datetime.now(timezone.utc)
+
+    id_dup = await find_id_duplicate(db, patient)
+    if id_dup:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "DUPLICATE_NATIONAL_ID",
+                "message": (
+                    f"National ID {patient.national_id} already belongs to "
+                    f"'{id_dup.get('first_name','')} {id_dup.get('last_name','')}' "
+                    f"(MRN {id_dup.get('mrn','')}). Open that record instead."
+                ),
+                "existing_patient_id": str(id_dup["_id"]),
+                "existing_mrn": id_dup.get("mrn"),
+            },
+        )
+
+    if not force:
+        existing = await find_potential_duplicate(db, patient)
+        if existing:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "POSSIBLE_DUPLICATE_PATIENT",
+                    "message": (
+                        f"A patient '{existing.get('first_name','')} {existing.get('last_name','')}' "
+                        f"(MRN {existing.get('mrn','')}) already matches these details. "
+                        "Open the existing record, or resubmit with force=true to register anyway."
+                    ),
+                    "existing_patient_id": str(existing["_id"]),
+                    "existing_mrn": existing.get("mrn"),
+                },
+            )
+
     try:
         mrn = patient.mrn if patient.mrn else await generate_mrn(db)
     except ValueError as exc:
@@ -205,6 +289,9 @@ async def create_patient(
         "dob": patient.dob,
         "gender": patient.gender,
         "blood_group": patient.blood_group,
+        "national_id": patient.national_id,
+        "guardian_national_id": patient.guardian_national_id,
+        "guardian_name": patient.guardian_name,
         "contact": patient.contact.model_dump() if patient.contact else None,
         "emergency_contact": patient.emergency_contact.model_dump() if patient.emergency_contact else None,
         "allergies": [a.model_dump() for a in patient.allergies] if patient.allergies else None,
@@ -225,6 +312,14 @@ async def create_patient(
         result = await db.patients.insert_one(doc)
     except DuplicateKeyError as exc:
         key = exc.details.get("keyPattern", {}) if exc.details else {}
+        if "national_id" in key:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "DUPLICATE_NATIONAL_ID",
+                    "message": f"National ID {patient.national_id} is already registered to another patient.",
+                },
+            )
         if "mrn" in key:
             raise HTTPException(status_code=409, detail=f"A patient with MRN '{mrn}' already exists")
         raise HTTPException(status_code=409, detail="Patient record already exists")
@@ -232,6 +327,7 @@ async def create_patient(
     return _doc_to_response(doc)
 
 
+# Update a patient's details.
 async def update_patient(
     db: AsyncDatabase, patient_id: str, update: PatientUpdate
 ) -> Optional[PatientResponse]:
@@ -281,6 +377,7 @@ async def update_patient(
     return _doc_to_response(result)
 
 
+# Add an allergy to a patient's record.
 async def add_allergy(
     db: AsyncDatabase,
     patient_id: str,
@@ -312,6 +409,7 @@ async def add_allergy(
     return _doc_to_response(result)
 
 
+# Remove an allergy from a patient's record.
 async def remove_allergy(
     db: AsyncDatabase,
     patient_id: str,
@@ -335,6 +433,7 @@ async def remove_allergy(
     return _doc_to_response(result)
 
 
+# List patients who have recorded allergies.
 async def get_patients_with_allergies(
     db: AsyncDatabase,
     skip: int = 0,
@@ -348,6 +447,7 @@ async def get_patients_with_allergies(
     return [_doc_to_response(doc) for doc in docs]
 
 
+# List paediatric patients.
 async def get_paediatric_patients(
     db: AsyncDatabase,
     skip: int = 0,
@@ -358,6 +458,7 @@ async def get_paediatric_patients(
     return [_doc_to_response(doc) for doc in docs]
 
 
+# List pregnant patients.
 async def get_pregnant_patients(
     db: AsyncDatabase,
     skip: int = 0,
@@ -368,6 +469,7 @@ async def get_pregnant_patients(
     return [_doc_to_response(doc) for doc in docs]
 
 
+# List neonatal patients.
 async def get_neonates(
     db: AsyncDatabase,
     skip: int = 0,
@@ -378,10 +480,12 @@ async def get_neonates(
     return [_doc_to_response(doc) for doc in docs]
 
 
+# Total number of patients.
 async def count_patients(db: AsyncDatabase) -> int:
     return await db.patients.count_documents({})
 
 
+# Count patients matching a filter.
 async def count_patients_by_filter(
     db: AsyncDatabase,
     is_paediatric: Optional[bool] = None,

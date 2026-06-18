@@ -1,3 +1,5 @@
+import hashlib
+import json
 from datetime import datetime, timedelta, date, timezone
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
@@ -6,8 +8,63 @@ from app.models.audit import AuditRecordInDB, AuditType, AuditSeverity, Resoluti
 from fastapi import HTTPException, status as http_status
 
 
+GENESIS_HASH = "0" * 64
+
+_HASH_EXCLUDE = {
+    "_id", "prev_hash", "record_hash",
+    "resolved", "resolved_by", "resolved_at",
+    "reviewed_at", "reviewed_by",
+    "countersigned", "countersigned_by", "countersigned_at", "countersign_note",
+}
+
+
+# Normalize datetimes to millisecond precision so a value hashes the same
+def _ms_truncate(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.replace(microsecond=(value.microsecond // 1000) * 1000).isoformat()
+    if isinstance(value, dict):
+        return {k: _ms_truncate(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_ms_truncate(v) for v in value]
+    return value
+
+
+# Stable JSON of the hashable subset of an audit doc.
+def _canonical_json(doc: dict) -> str:
+    subset = {k: _ms_truncate(v) for k, v in doc.items() if k not in _HASH_EXCLUDE}
+    safe = _make_snapshot_safe(subset)
+    return json.dumps(safe, sort_keys=True, separators=(",", ":"), default=str)
+
+
+# SHA-256 of this record's immutable content chained to prev_hash.
+def compute_record_hash(doc: dict, prev_hash: str) -> str:
+    payload = prev_hash + "|" + _canonical_json(doc)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+# Insert an audit record with its hash-chain links set.
+async def _chained_insert(db: AsyncDatabase, doc: dict) -> dict:
+    last = await db.audit_records.find(
+        {"record_hash": {"$exists": True}}
+    ).sort([("created_at", -1), ("_id", -1)]).limit(1).to_list(length=1)
+    prev_hash = last[0]["record_hash"] if last else GENESIS_HASH
+
+    doc["prev_hash"] = prev_hash
+    result = await db.audit_records.insert_one(doc)
+    doc["_id"] = result.inserted_id
+
+    stored = await db.audit_records.find_one({"_id": result.inserted_id})
+    record_hash = compute_record_hash(stored, prev_hash)
+    await db.audit_records.update_one(
+        {"_id": result.inserted_id},
+        {"$set": {"record_hash": record_hash}},
+    )
+    doc["record_hash"] = record_hash
+    return doc
+
+
+# Convert a MongoDB document to a JSON-safe dict by stringifying ObjectIds.
 def _make_snapshot_safe(doc: Optional[dict]) -> Optional[dict]:
-    """Convert a MongoDB document to a JSON-safe dict by stringifying ObjectIds."""
     if doc is None:
         return None
     safe = {}
@@ -25,7 +82,9 @@ def _make_snapshot_safe(doc: Optional[dict]) -> Optional[dict]:
     return safe
 
 
+# Convert an audit document to a model.
 def _doc_to_audit(doc: dict) -> AuditRecordInDB:
+    # Stringify an ObjectId, passing through None.
     def _str(val) -> Optional[str]:
         if val is None:
             return None
@@ -77,6 +136,7 @@ def _doc_to_audit(doc: dict) -> AuditRecordInDB:
     )
 
 
+# Write a new audit record into the hash chain.
 async def create_audit_record(
     db: AsyncDatabase,
     prescription_id: str,
@@ -106,7 +166,6 @@ async def create_audit_record(
 ) -> AuditRecordInDB:
     now = datetime.now(timezone.utc)
 
-    # HIGH and CRITICAL severity clinical flags require countersign before resolution
     high_severity_clinical_types = {AuditSeverity.high.value, AuditSeverity.critical.value}
     clinical_flag_codes = {
         "allergy_match", "drug_interaction", "controlled_sub",
@@ -159,11 +218,11 @@ async def create_audit_record(
         "reviewed_by": None,
         "created_at": now,
     }
-    result = await db.audit_records.insert_one(doc)
-    doc["_id"] = result.inserted_id
+    doc = await _chained_insert(db, doc)
     return _doc_to_audit(doc)
 
 
+# Log a security event (e.g. failed login).
 async def create_security_audit(
     db: AsyncDatabase,
     user_id: str,
@@ -191,8 +250,8 @@ async def create_security_audit(
     )
 
 
+# Attach rx_number and patient_name to audit docs in-place.
 async def _enrich_audit_docs(db: AsyncDatabase, docs: List[dict]) -> List[dict]:
-    """Attach rx_number and patient_name to audit docs in-place."""
     rx_ids = list({d["prescription_id"] for d in docs if d.get("prescription_id") and d["prescription_id"] != "system"})
     rx_map: Dict[str, str] = {}
     patient_map: Dict[str, str] = {}
@@ -210,7 +269,6 @@ async def _enrich_audit_docs(db: AsyncDatabase, docs: List[dict]) -> List[dict]:
                 if pid:
                     patient_map[rx_str] = pid
 
-    # batch fetch patient names
     pid_set = list(set(patient_map.values()))
     valid_pids = [ObjectId(pid) for pid in pid_set if ObjectId.is_valid(pid)]
     pname_map: Dict[str, str] = {}
@@ -228,6 +286,7 @@ async def _enrich_audit_docs(db: AsyncDatabase, docs: List[dict]) -> List[dict]:
     return docs
 
 
+# List audit records with filters and paging.
 async def get_audit_records(
     db: AsyncDatabase,
     prescription_id: Optional[str] = None,
@@ -242,6 +301,7 @@ async def get_audit_records(
         query["prescription_id"] = prescription_id
     if resolved is not None:
         query["resolved"] = resolved
+        query["type"] = {"$nin": ["resolution", "countersign", "status_change"]}
     if flag_type is not None:
         query["flag_code"] = flag_type
     if severity is not None:
@@ -252,12 +312,12 @@ async def get_audit_records(
     return [_doc_to_audit(doc) for doc in docs]
 
 
+# Return only original (non-resolution) unresolved flag records.
 async def get_unresolved_audit_records(
     db: AsyncDatabase,
     skip: int = 0,
     limit: int = 50,
 ) -> List[AuditRecordInDB]:
-    """Return only original (non-resolution) unresolved flag records."""
     query = {
         "resolved": False,
         "type": {"$nin": ["resolution", "countersign", "status_change"]},
@@ -268,6 +328,7 @@ async def get_unresolved_audit_records(
     return [_doc_to_audit(doc) for doc in docs]
 
 
+# Full immutable audit log with all record types.
 async def get_audit_log(
     db: AsyncDatabase,
     skip: int = 0,
@@ -279,7 +340,6 @@ async def get_audit_log(
     date_from: Optional[datetime] = None,
     date_to: Optional[datetime] = None,
 ) -> List[AuditRecordInDB]:
-    """Full immutable audit log with all record types."""
     query: dict = {}
     if prescription_id:
         query["prescription_id"] = prescription_id
@@ -302,6 +362,7 @@ async def get_audit_log(
     return [_doc_to_audit(doc) for doc in docs]
 
 
+# Fetch one audit record by ID.
 async def get_audit_by_id(
     db: AsyncDatabase, audit_id: str
 ) -> Optional[AuditRecordInDB]:
@@ -315,6 +376,7 @@ async def get_audit_by_id(
     return _doc_to_audit(doc)
 
 
+# Create an immutable countersign record for a flag.
 async def countersign_audit(
     db: AsyncDatabase,
     flag_id: str,
@@ -324,14 +386,6 @@ async def countersign_audit(
     ip_address: Optional[str] = None,
     user_agent: Optional[str] = None,
 ) -> AuditRecordInDB:
-    """
-    Create an immutable countersign record for a flag.
-
-    Rules:
-    - Flag must exist and be unresolved.
-    - Countersigner must not be the same user who created the flag.
-    - Only one countersign record may exist per flag.
-    """
     from app.ws.manager import manager
 
     try:
@@ -431,8 +485,7 @@ async def countersign_audit(
         "created_at": now,
     }
 
-    result = await db.audit_records.insert_one(countersign_doc)
-    countersign_doc["_id"] = result.inserted_id
+    countersign_doc = await _chained_insert(db, countersign_doc)
 
     prescription_id = flag_doc.get("prescription_id", "")
     event = {
@@ -453,6 +506,7 @@ async def countersign_audit(
     return _doc_to_audit(countersign_doc)
 
 
+# Create resolution records for all open flags on a prescription.
 async def resolve_audit_record(
     prescription_id: str,
     resolution_note: str,
@@ -460,16 +514,6 @@ async def resolve_audit_record(
     auditor,
     db: AsyncDatabase,
 ) -> List[AuditRecordInDB]:
-    """
-    Create resolution records for all open flags on a prescription.
-
-    Immutability contract: original flag records are never modified.
-    A resolution record is appended. The resolved state is a projection
-    derived from the existence of a resolution record for a given flag.
-
-    Blocking rule: HIGH or CRITICAL severity flags that have esig_required=True
-    must have a countersign record before resolution is permitted.
-    """
     from app.ws.manager import manager
 
     now = datetime.now(timezone.utc)
@@ -491,7 +535,6 @@ async def resolve_audit_record(
             },
         )
 
-    # Check each high-severity flag for required countersign
     for record in unresolved_records:
         if record.get("esig_required", False):
             flag_id = str(record["_id"])
@@ -560,20 +603,14 @@ async def resolve_audit_record(
             "created_at": now,
         }
 
-        result = await db.audit_records.insert_one(resolution_doc)
-        resolution_doc["_id"] = result.inserted_id
+        resolution_doc = await _chained_insert(db, resolution_doc)
         resolution_records.append(_doc_to_audit(resolution_doc))
 
-        # Mark original as resolved in place - projection update only.
-        # This is a deliberate projection flag: original record content is unchanged,
-        # only the resolved boolean is set so queries for open flags remain correct.
-        # The full resolution detail is in the resolution record linked via original_flag_id.
         await db.audit_records.update_one(
             {"_id": original["_id"]},
             {"$set": {"resolved": True}},
         )
 
-    # Fetch doctor_id from the prescription so the broadcast targets the correct room
     rx_doc = await db.prescriptions.find_one({"_id": ObjectId(prescription_id)}) if _is_valid_object_id(prescription_id) else None
     doctor_id_val = str(rx_doc.get("doctor_id")) if rx_doc else None
 
@@ -599,6 +636,7 @@ async def resolve_audit_record(
     return resolution_records
 
 
+# True if the string is a valid ObjectId.
 def _is_valid_object_id(value: str) -> bool:
     try:
         ObjectId(value)
@@ -607,6 +645,7 @@ def _is_valid_object_id(value: str) -> bool:
         return False
 
 
+# List security events for a given day.
 async def get_security_events_for_day(
     db: AsyncDatabase,
     review_date: date,
@@ -624,6 +663,7 @@ async def get_security_events_for_day(
     return [_doc_to_audit(doc) for doc in docs]
 
 
+# Mark security events as reviewed.
 async def mark_events_reviewed(
     db: AsyncDatabase,
     event_ids: List[str],
@@ -645,6 +685,7 @@ async def mark_events_reviewed(
     return result.modified_count
 
 
+# Raise the severity of flags left open too long.
 async def escalate_overdue_flags(db: AsyncDatabase):
     from app.ws.manager import manager
 
@@ -712,7 +753,7 @@ async def escalate_overdue_flags(db: AsyncDatabase):
             "created_at": now,
         }
 
-        await db.audit_records.insert_one(escalation_doc)
+        await _chained_insert(db, escalation_doc)
         escalated_count += 1
 
         event = {
@@ -733,6 +774,7 @@ async def escalate_overdue_flags(db: AsyncDatabase):
     return escalated_count
 
 
+# List open flags on a prescription.
 async def get_unresolved_for_prescription(
     prescription_id: str, db: AsyncDatabase
 ) -> List[AuditRecordInDB]:
@@ -743,3 +785,68 @@ async def get_unresolved_for_prescription(
     })
     docs = await cursor.to_list(length=None)
     return [_doc_to_audit(doc) for doc in docs]
+
+
+# Walk the audit hash chain in creation order and report tampering.
+async def verify_chain_integrity(db: AsyncDatabase) -> Dict[str, Any]:
+    cursor = db.audit_records.find(
+        {"record_hash": {"$exists": True}}
+    ).sort([("created_at", 1), ("_id", 1)])
+    records = await cursor.to_list(length=None)
+
+    total = len(records)
+    expected_prev = GENESIS_HASH
+    broken_at: Optional[str] = None
+    issues: List[dict] = []
+
+    for rec in records:
+        rec_id = str(rec["_id"])
+        if rec.get("prev_hash") != expected_prev:
+            issues.append({
+                "record_id": rec_id,
+                "problem": "broken_link",
+                "detail": "prev_hash does not match the previous record's hash (a record was deleted or reordered).",
+            })
+            broken_at = broken_at or rec_id
+        recomputed = compute_record_hash(rec, rec.get("prev_hash", GENESIS_HASH))
+        if recomputed != rec.get("record_hash"):
+            issues.append({
+                "record_id": rec_id,
+                "problem": "content_modified",
+                "detail": "record_hash does not match the content (a record was edited after creation).",
+            })
+            broken_at = broken_at or rec_id
+        expected_prev = rec.get("record_hash", expected_prev)
+
+    unchained = await db.audit_records.count_documents({"record_hash": {"$exists": False}})
+
+    return {
+        "intact": len(issues) == 0 and unchained == 0,
+        "total_chained_records": total,
+        "unchained_records": unchained,
+        "first_break_at": broken_at,
+        "issues": issues[:50],
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# One-time: assign prev_hash/record_hash to any records that lack them,
+async def backfill_hash_chain(db: AsyncDatabase) -> Dict[str, Any]:
+    cursor = db.audit_records.find({}).sort([("created_at", 1), ("_id", 1)])
+    records = await cursor.to_list(length=None)
+
+    prev_hash = GENESIS_HASH
+    updated = 0
+    for rec in records:
+        if rec.get("record_hash"):
+            prev_hash = rec["record_hash"]
+            continue
+        record_hash = compute_record_hash(rec, prev_hash)
+        await db.audit_records.update_one(
+            {"_id": rec["_id"]},
+            {"$set": {"prev_hash": prev_hash, "record_hash": record_hash}},
+        )
+        prev_hash = record_hash
+        updated += 1
+
+    return {"backfilled": updated, "total": len(records)}

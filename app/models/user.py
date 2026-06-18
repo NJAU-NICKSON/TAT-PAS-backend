@@ -2,10 +2,11 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-# Import Roles enum from your RBAC module
 from app.security.rbac import Roles
+from app.security.passwords import validate_password_length
 
 
+# Shared user fields.
 class UserBase(BaseModel):
     username: str
     full_name: str
@@ -13,19 +14,21 @@ class UserBase(BaseModel):
     role: str
     department_id: Optional[str] = None
 
+    # Ensure the role is one of the predefined roles.
     @field_validator("role")
     @classmethod
     def validate_role(cls, v: str) -> str:
-        """Ensure the role is one of the predefined roles."""
         valid_roles = [r.value for r in Roles]
         if v not in valid_roles:
             raise ValueError(f"Invalid role '{v}'. Must be one of {valid_roles}")
         return v
 
 
+# Fields for creating a user.
 class UserCreate(UserBase):
     password: str
 
+    # Require a password of 8+ chars with a number.
     @field_validator("password")
     @classmethod
     def validate_password(cls, v: str) -> str:
@@ -33,9 +36,11 @@ class UserCreate(UserBase):
             raise ValueError("Password must be at least 8 characters")
         if not any(c.isdigit() for c in v):
             raise ValueError("Password must contain at least one number")
+        validate_password_length(v)
         return v
 
 
+# Fields for updating a user.
 class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     email: Optional[str] = None
@@ -43,6 +48,7 @@ class UserUpdate(BaseModel):
     department_id: Optional[str] = None
     password: Optional[str] = None
 
+    # Require a password of 8+ chars with a number.
     @field_validator("password")
     @classmethod
     def validate_password(cls, v: Optional[str]) -> Optional[str]:
@@ -51,8 +57,10 @@ class UserUpdate(BaseModel):
                 raise ValueError("Password must be at least 8 characters")
             if not any(c.isdigit() for c in v):
                 raise ValueError("Password must contain at least one number")
+            validate_password_length(v)
         return v
 
+    # Reject unknown role values.
     @field_validator("role")
     @classmethod
     def validate_role(cls, v: Optional[str]) -> Optional[str]:
@@ -63,35 +71,59 @@ class UserUpdate(BaseModel):
         return v
 
 
+# User as stored in the database.
 class UserInDB(UserBase):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str = Field(alias="_id", default="")
     password_hash: str
+    is_active: bool = True
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc).replace(tzinfo=None)
     )
     last_login: Optional[datetime] = None
 
+    # Accept an ObjectId or string id.
     @field_validator("id", mode="before")
     @classmethod
     def coerce_object_id(cls, v: Any) -> str:
         return str(v)
 
 
+# User returned by the API.
 class UserResponse(UserBase):
     model_config = ConfigDict(populate_by_name=True)
 
     id: str
+    is_active: bool = True
     created_at: datetime
     last_login: Optional[datetime] = None
 
 
+# Login request body.
 class LoginRequest(BaseModel):
     username: str
     password: str
 
 
+# Change-password request body.
+class ChangePasswordRequest(BaseModel):
+    current_password: str
+    new_password: str
+
+    # Require the new password to meet strength rules.
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("Password must be at least 8 characters")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("Password must contain at least one number")
+        validate_password_length(v)
+        return v
+
+
+# Access + refresh tokens returned on login.
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str

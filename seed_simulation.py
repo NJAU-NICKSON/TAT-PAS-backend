@@ -13,44 +13,44 @@ from bson import ObjectId
 from passlib.context import CryptContext
 from pymongo import MongoClient
 
-# Config
 MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
 MONGO_DB  = os.getenv("MONGO_DB",  "tatpas")
 
 pwd_ctx = CryptContext(schemes=["bcrypt"])
 
+# Hash a seed password.
 def hp(plain):
     return pwd_ctx.hash(plain)
 
 NOW = datetime.utcnow()
 
 
+# Return a naive UTC datetime offset from NOW going into the past.
 def dt(days=0, hours=0, minutes=0):
-    """Return a naive UTC datetime offset from NOW going into the past."""
     return NOW - timedelta(days=days, hours=hours, minutes=minutes)
 
 
-# Helpers
+# Make a fresh ObjectId.
 def oid():
     return ObjectId()
 
 
+# ObjectId → string.
 def sid(o):
-    """ObjectId → string."""
     return str(o)
 
 
-# Data definitions
-
+# Build the seed staff accounts.
 def build_users():
     users = []
 
+    # Add one seed user.
     def u(username, password, full_name, role, email=None):
         _id = oid()
         users.append({
             "_id": _id,
             "username": username,
-            "email": email or f"{username}@tatpas.hospital.ke",
+            "email": email or f"{username}@scionhospital.co.ke",
             "password_hash": hp(password),
             "role": role,
             "full_name": full_name,
@@ -82,6 +82,7 @@ def build_users():
     }
 
 
+# Build the seed departments.
 def build_departments():
     depts = []
     dept_map = {}
@@ -106,10 +107,12 @@ def build_departments():
     return depts, dept_map
 
 
+# Build the seed ward beds.
 def build_beds(dept_map):
     beds = []
     bed_ids = {"GW": [], "ICU": [], "MAT": [], "PED": []}
 
+    # Add one seed bed.
     def bed(dept_code, ward, room, num, label, btype, status):
         _id = oid()
         beds.append({
@@ -147,9 +150,46 @@ def build_beds(dept_map):
     return beds, bed_ids
 
 
+# Build the seed consultation rooms with doctor/nurse pairs.
+def build_consultation_rooms(dept_map, user_ids):
+    rooms = []
+    doctors = user_ids["doctors"]
+    nurses  = user_ids["nurses"]
+
+    # Add one seed consultation room.
+    def room(dept_code, number, name, floor, status, doctor_id=None, nurse_id=None, notes=None):
+        rooms.append({
+            "_id": oid(),
+            "department_id": sid(dept_map[dept_code]),
+            "room_number": number,
+            "room_name": name,
+            "floor": floor,
+            "status": status,
+            "current_doctor_id": sid(doctor_id) if doctor_id else None,
+            "current_nurse_id": sid(nurse_id) if nurse_id else None,
+            "current_patient_id": None,
+            "notes": notes,
+            "created_at": dt(days=60),
+            "updated_at": None,
+        })
+
+    room("OPD", "OPD-CR-01", "Consultation Room 1", "G", "available", doctors[0], nurses[0])
+    room("OPD", "OPD-CR-02", "Consultation Room 2", "G", "available", doctors[1], nurses[1])
+    room("OPD", "OPD-CR-03", "Consultation Room 3", "G", "available", doctors[2], nurses[2])
+
+    room("OPD", "OPD-CR-04", "Consultation Room 4", "G", "available", None, None, "Vacant - ready to assign a doctor and nurse")
+    room("OPD", "OPD-CR-05", "Consultation Room 5", "G", "available", None, None, "Vacant - ready to assign a doctor and nurse")
+    room("OPD", "OPD-CR-06", "Consultation Room 6", "G", "available", None, None, "Vacant - ready to assign a doctor and nurse")
+
+    room("ED", "AE-CR-01", "Triage Room 1", "G", "available")
+    room("ED", "AE-CR-02", "Triage Room 2", "G", "available")
+
+    return rooms
+
+
+# Build the seed patients.
 def build_patients():
     raw = [
-        # (first, last, dob_str, gender, blood, weight, allergies, chronic, flags)
         ("Mary",      "Njoki Kamau",      "1985-03-12", "female", "A+",  68, [{"substance":"Penicillin","severity":"severe"}],   ["Hypertension"],                     {}),
         ("John",      "Otieno Odhiambo",  "1972-07-22", "male",   "O+",  82, [],                                                ["Diabetes Type 2","Hypertension"],   {}),
         ("Fatuma",    "Abdi Hassan",      "1990-11-05", "female", "B+",  55, [{"substance":"Sulfonamides","severity":"moderate"}],[],                                    {"is_pregnant":True}),
@@ -178,10 +218,11 @@ def build_patients():
         "0711223344","0722334455","0733445566","0744556677","0755667788",
         "0766778899","0777889900","0788990011","0799001122","0710112233",
     ]
-    cities = ["Nairobi","Mombasa","Kisumu","Nakuru","Nairobi","Nairobi",
-              "Nakuru","Mombasa","Nairobi","Kisumu","Nairobi","Mombasa",
-              "Nairobi","Kisumu","Nakuru","Nairobi","Mombasa","Nairobi",
-              "Kisumu","Nairobi"]
+    cities = ["Nairobi"] * 20
+    estates = ["Mwiki","Kasarani","Roysambu","Zimmerman","Githurai 45","Kahawa West",
+               "Kahawa Sukari","Ruaraka","Clay City","Sunton","Hunters","Mwihoko",
+               "Kahawa Wendani","Lucky Summer","Babadogo","Githurai 44","Mirema",
+               "Thome","Garden Estate","Ridgeways"]
     kin_names = [
         "John Kamau","Mary Odhiambo","Ahmed Hassan","Jane Waweru","Patrick Oloo",
         "Mercy Bett","David Ngugi","Alice Kariuki","Simon Rono","Ruth Njoroge",
@@ -200,13 +241,17 @@ def build_patients():
     for i, (first, last, dob, gender, blood, weight, allergies, chronic, flags) in enumerate(raw):
         _id = oid()
         mrn = f"MRN-2024-{i+1:04d}"
-        ins = {"provider": "NHIF", "member_number": f"NHIF{10000+i}", "is_active": True} if i % 2 == 0 else None
+        ins = {"provider": "SHA", "member_number": f"SHA{10000+i}", "is_active": True} if i % 2 == 0 else None
+
+        dob_dt = datetime.strptime(dob, "%Y-%m-%d")
+        age_years = (NOW - dob_dt).days // 365
+
         rec = {
             "_id": _id,
             "mrn": mrn,
             "first_name": first,
             "last_name": last,
-            "dob": datetime.strptime(dob, "%Y-%m-%d"),
+            "dob": dob_dt,
             "gender": gender,
             "blood_group": blood,
             "weight_kg": weight,
@@ -215,6 +260,7 @@ def build_patients():
             "contact": {
                 "phone": phones[i],
                 "email": f"{first.lower()}.{last.lower().replace(' ','.')}@gmail.com",
+                "address": f"{estates[i]} Estate, P.O. Box {1000 + i * 7}, {cities[i]}",
                 "city": cities[i],
             },
             "next_of_kin": {
@@ -226,6 +272,13 @@ def build_patients():
         }
         if ins:
             rec["insurance"] = ins
+
+        if age_years >= 18:
+            rec["national_id"] = str(20000000 + i)
+        else:
+            rec["guardian_national_id"] = str(30000000 + i)
+            rec["guardian_name"] = kin_names[i]
+
         rec.update(flags)
         patients.append(rec)
         patient_ids.append(_id)
@@ -233,6 +286,7 @@ def build_patients():
     return patients, patient_ids
 
 
+# Build the seed visits.
 def build_visits(patient_ids, dept_map, user_ids):
     doctors = user_ids["doctors"]
     nurses  = user_ids["nurses"]
@@ -241,12 +295,14 @@ def build_visits(patient_ids, dept_map, user_ids):
     visit_ids = []
     vn = 1
 
+    # Make a seed visit number.
     def vnum():
         nonlocal vn
         n = f"VN-2024-{vn:04d}"
         vn += 1
         return n
 
+    # Make a set of seed triage vitals.
     def vitals(weight):
         return {
             "blood_pressure_systolic": 120,
@@ -304,10 +360,6 @@ def build_visits(patient_ids, dept_map, user_ids):
         "Bronchitis",
     ]
 
-    # We'll assign statuses deliberately across 30 visits (20 patients, some get 2)
-    # Status plan: 5 registered, 3 triaged, 4 waiting_for_doctor, 3 in_consultation,
-    #              2 awaiting_results, 3 treatment_in_progress, 2 admitted/in_ward,
-    #              5 discharged, 2 cancelled, 1 ready_for_discharge
     status_plan = (
         ["registered"] * 5 +
         ["triaged"] * 3 +
@@ -320,7 +372,6 @@ def build_visits(patient_ids, dept_map, user_ids):
         ["cancelled"] * 2 +
         ["ready_for_discharge"]
     )
-    # 30 visits for 20 patients; first 10 patients get 2 visits, last 10 get 1
     patient_visit_map = []
     for i in range(10):
         patient_visit_map.append(i)
@@ -331,11 +382,8 @@ def build_visits(patient_ids, dept_map, user_ids):
     dept_codes = (["OPD"] * 18 + ["ED"] * 7 + ["GW"] * 5)[:30]
     visit_types_map = {"OPD": "opd", "ED": "emergency", "GW": "ipd"}
 
-    # Triage delay indices (visits 0,1,2 → delay > 45 min)
     triage_delay_indices = {0, 1, 2}
-    # Doctor wait delay indices (visits 3,4,5 → wait > 90 min)
     doctor_wait_indices  = {3, 4, 5}
-    # Emergency priority indices
     emergency_priority   = {6, 7}
 
     for idx in range(30):
@@ -360,7 +408,6 @@ def build_visits(patient_ids, dept_map, user_ids):
             "created_at": reg_at,
         }
 
-        # Triage timestamps
         if status not in ["registered", "cancelled"]:
             delay_min = 60 if idx in triage_delay_indices else 20
             triaged_at = reg_at + timedelta(minutes=delay_min)
@@ -396,7 +443,7 @@ def build_visits(patient_ids, dept_map, user_ids):
             rec["priority"] = "immediate"
             rec["visit_type"] = "emergency"
 
-        rec["prescription_ids"] = []  # filled in after prescriptions are built
+        rec["prescription_ids"] = []
 
         visits.append(rec)
         visit_ids.append(_id)
@@ -404,6 +451,7 @@ def build_visits(patient_ids, dept_map, user_ids):
     return visits, visit_ids
 
 
+# Build the seed prescriptions.
 def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
     doctors    = user_ids["doctors"]
     pharmacist = user_ids["pharmacist"]
@@ -412,20 +460,19 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
     rx_ids = []
     rx_n = 1
 
+    # Make a seed prescription number.
     def rxnum():
         nonlocal rx_n
         n = f"RX-2024-{rx_n:04d}"
         rx_n += 1
         return n
 
+    # Make a seed medication line.
     def med(name, dose, route, freq, days, **kw):
         m = {"name": name, "dose": dose, "route": route, "frequency": freq, "duration_days": days}
         m.update(kw)
         return m
 
-    # status distribution: 2 draft, 4 submitted, 3 pending_amendment, 6 flagged,
-    #                       5 verified, 5 dispensed, 3 administered, 2 archived
-    # We'll build 30 prescriptions, one per visit
     status_plan = (
         ["draft"] * 2 +
         ["submitted"] * 4 +
@@ -437,7 +484,6 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
         ["archived"] * 2
     )
 
-    # order_source / priority combos
     sources    = ["opd","opd","emergency","ipd","opd","opd","emergency","opd","maternity",
                   "paediatric","opd","ipd","opd","opd","opd","ipd","paediatric","opd","opd","opd",
                   "opd","opd","emergency","ipd","opd","opd","emergency","opd","maternity","paediatric"]
@@ -448,17 +494,14 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
 
     sla_map = {"stat": 30, "urgent": 60, "routine": 120, "discharge": 90, "nicu": 45, "chemo": 60}
 
-    # SLA breach indices — must be in verified/dispensed/administered/archived (indices 15-29)
     sla_breach_indices = {17, 20, 22, 25, 28}
 
-    # Flag scenarios
-    high_dose_indices        = {6, 13, 19}   # Morphine 1500mg or Paracetamol 2000mg
-    allergy_match_indices    = {0, 7, 18}    # Penicillin to patients 0 (Mary), 7 (Peter), 18 (Josephine)
-    drug_interaction_indices = {3, 14}       # Warfarin + Aspirin
-    controlled_indices       = {10, 11}      # Tramadol, Morphine
-    high_alert_indices       = {15, 16}      # Heparin, Insulin
+    high_dose_indices        = {6, 13, 19}
+    allergy_match_indices    = {0, 7, 18}
+    drug_interaction_indices = {3, 14}
+    controlled_indices       = {10, 11}
+    high_alert_indices       = {15, 16}
 
-    # Medication catalogue
     meds_catalogue = [
         [med("Amoxicillin","500mg","oral","TDS",7)],
         [med("Metformin","500mg","oral","BD",30)],
@@ -466,20 +509,20 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
         [med("Lisinopril","10mg","oral","OD",30), med("Warfarin","5mg","oral","OD",30), med("Aspirin","300mg","oral","OD",30)],
         [med("Prednisolone","20mg","oral","OD",7)],
         [med("Omeprazole","20mg","oral","OD",14)],
-        [med("Morphine","1500mg","iv","Q4H",3, is_controlled=True)],  # HIGH DOSE
-        [med("Amoxicillin","500mg","oral","TDS",7)],  # allergy_match (Penicillin → Peter)
+        [med("Morphine","1500mg","iv","Q4H",3, is_controlled=True)],
+        [med("Amoxicillin","500mg","oral","TDS",7)],
         [med("Salbutamol","2.5mg","nebulisation","Q6H",5), med("Prednisolone","10mg","oral","OD",3)],
         [med("Paracetamol","500mg","oral","QDS",5)],
         [med("Tramadol","100mg","oral","TDS",5, is_controlled=True)],
         [med("Morphine","10mg","iv","Q4H",3, is_controlled=True)],
         [med("Atorvastatin","40mg","oral","OD",30)],
-        [med("Paracetamol","2000mg","oral","QDS",5)],  # HIGH DOSE
-        [med("Warfarin","5mg","oral","OD",30), med("Aspirin","300mg","oral","OD",30)],  # drug interaction
+        [med("Paracetamol","2000mg","oral","QDS",5)],
+        [med("Warfarin","5mg","oral","OD",30), med("Aspirin","300mg","oral","OD",30)],
         [med("Heparin","5000IU","sc","BD",7, is_high_alert=True)],
         [med("Insulin","20IU","sc","OD",30, is_high_alert=True)],
         [med("Ibuprofen","400mg","oral","TDS",5)],
-        [med("Amoxicillin","500mg","oral","TDS",7)],  # allergy_match (Penicillin → Josephine)
-        [med("Paracetamol","2000mg","oral","QDS",3)],  # HIGH DOSE
+        [med("Amoxicillin","500mg","oral","TDS",7)],
+        [med("Paracetamol","2000mg","oral","QDS",3)],
         [med("Metformin","1000mg","oral","BD",30)],
         [med("Lisinopril","5mg","oral","OD",30)],
         [med("Salbutamol","5mg","nebulisation","Q4H",3)],
@@ -492,8 +535,7 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
         [med("Prednisolone","5mg","oral","OD",7)],
     ]
 
-    # map allergy_match indices to patient_id positions
-    allergy_patient_map = {0: 0, 7: 7, 18: 18}  # rx index → patient index
+    allergy_patient_map = {0: 0, 7: 7, 18: 18}
 
     for idx in range(30):
         _id = oid()
@@ -505,7 +547,6 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
         source = sources[idx]
         priority = priorities[idx]
         sla_thresh = sla_map.get(priority, 120)
-        # Prescription is ordered by the doctor — must be AFTER consultation starts.
         if "consultation_ended_at" in vis:
             ordered_at = vis["consultation_ended_at"]
         elif "consultation_started_at" in vis:
@@ -515,7 +556,6 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
         else:
             ordered_at = vis["registered_at"] + timedelta(minutes=90)
 
-        # Flags
         flags = []
         if idx in high_dose_indices:
             flags.append("high_dose")
@@ -551,7 +591,6 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
             "updated_at": ordered_at,
         }
 
-        # TAT fields for verified/dispensed/administered
         if status in ["verified", "dispensed", "administered", "archived"]:
             o2s = 15 + (idx % 30)
             s2v = 25 + (idx % 90) if idx not in {5, 9, 12, 17, 22} else 130
@@ -573,7 +612,6 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
             if d2a:
                 rec["tat_dispense_to_admin_min"] = float(d2a)
 
-            # SLA breach
             if idx in sla_breach_indices:
                 breach_dur = tat_pharmacy - sla_thresh
                 if breach_dur > 0:
@@ -602,7 +640,7 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
                 rec["tat_flag_hold_min"] = float(30 + idx * 2)
 
         if status in ["flagged", "pending_amendment"] and flags:
-            rec["pharmacist_comment"] = "Flagged for clinical review — please verify before dispensing."
+            rec["pharmacist_comment"] = "Flagged for clinical review - please verify before dispensing."
 
         rxs.append(rec)
         rx_ids.append(_id)
@@ -610,17 +648,14 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
     return rxs, rx_ids
 
 
+# Build the seed audit records.
 def build_audit_records(rx_ids, rxs, user_ids):
     auditor    = user_ids["auditor"]
     pharmacist = user_ids["pharmacist"]
 
     records = []
 
-    # 25 records
-    # severity: 5 critical, 8 high, 7 medium, 5 low
-    # type: 10 automated, 6 manual, 5 sla_breach, 3 sla_warning, 1 status_change
     configs = [
-        # (severity, atype, flag_code, issue, created_by_role, resolved, countersigned)
         ("critical", "automated",     "high_dose",          "Morphine dose exceeds safe threshold",               "system",     True,  True),
         ("critical", "automated",     "allergy_match",       "Penicillin prescribed to patient with known allergy","system",     True,  True),
         ("critical", "sla_breach",    "sla_exceeded",        "Prescription TAT exceeded SLA by >60 minutes",       "system",     True,  False),
@@ -720,9 +755,9 @@ def build_audit_records(rx_ids, rxs, user_ids):
     return records
 
 
+# Build the seed bills.
 def build_bills(visit_ids, visits):
     bills = []
-    # 15 bills
     status_plan = ["paid","paid","paid","paid","paid",
                    "open","open","open","open",
                    "partially_paid","partially_paid","partially_paid",
@@ -730,6 +765,7 @@ def build_bills(visit_ids, visits):
                    "waived"]
 
     bill_n = 1
+    # Make a seed bill number.
     def bnum():
         nonlocal bill_n
         n = f"BILL-2024-{bill_n:04d}"
@@ -741,31 +777,31 @@ def build_bills(visit_ids, visits):
         [("consultation","Specialist Consultation",1,1500,1500),("lab","FBC + RFT",1,1800,1800),("pharmacy","Metformin 500mg x60",1,900,900)],
         [("consultation","Emergency Consultation",1,1200,1200),("procedure","IV Line Insertion",1,1500,1500),("pharmacy","IV Fluids + Drugs",1,2500,2500)],
         [("consultation","OPD Consultation",1,800,800),("pharmacy","Lisinopril 10mg x30",1,750,750),("lab","Renal Function Tests",1,1200,1200)],
-        [("ward","General Ward – 2 Days",2,2500,5000),("pharmacy","IV Antibiotics",1,3000,3000),("procedure","Wound Dressing",2,800,1600)],
+        [("ward","General Ward - 2 Days",2,2500,5000),("pharmacy","IV Antibiotics",1,3000,3000),("procedure","Wound Dressing",2,800,1600)],
         [("consultation","OPD Consultation",1,500,500),("pharmacy","Salbutamol Inhaler",1,1800,1800)],
         [("consultation","Paediatric Consultation",1,800,800),("pharmacy","Prednisolone Syrup",1,600,600)],
         [("consultation","Emergency Consultation",1,1200,1200),("lab","Blood Glucose",1,400,400),("pharmacy","Insulin",1,2200,2200)],
         [("consultation","OPD Consultation",1,800,800),("radiology","Chest X-Ray",1,1500,1500)],
         [("consultation","OPD Consultation",1,500,500),("pharmacy","Paracetamol",1,300,300)],
-        [("ward","ICU – 1 Day",1,4000,4000),("procedure","Central Line",1,8000,8000),("pharmacy","Morphine + Adjuncts",1,5000,5000)],
-        [("ward","General Ward – 3 Days",3,2000,6000),("pharmacy","Oral Medications",1,1500,1500)],
+        [("ward","ICU - 1 Day",1,4000,4000),("procedure","Central Line",1,8000,8000),("pharmacy","Morphine + Adjuncts",1,5000,5000)],
+        [("ward","General Ward - 3 Days",3,2000,6000),("pharmacy","Oral Medications",1,1500,1500)],
         [("consultation","OPD Consultation",1,1000,1000),("lab","LFT + RFT",1,2000,2000)],
         [("consultation","OPD Consultation",1,800,800),("pharmacy","Atorvastatin 20mg",1,700,700)],
         [("consultation","Maternity Consultation",1,1500,1500),("procedure","Antenatal Ultrasound",1,2500,2500),("pharmacy","Antenatal Supplements",1,800,800)],
     ]
 
     payments_data = [
-        [{"amount":2000,"method":"nhif"},{"amount":1200,"method":"cash"}],
-        [{"amount":4200,"method":"nhif"}],
+        [{"amount":2000,"method":"sha"},{"amount":1200,"method":"cash"}],
+        [{"amount":4200,"method":"sha"}],
         [{"amount":5200,"method":"mpesa"}],
-        [{"amount":2750,"method":"nhif"},{"amount":500,"method":"cash"}],
-        [{"amount":9600,"method":"nhif"},{"amount":2600,"method":"card"}],
-        None, None, None, None,  # open bills
-        [{"amount":3000,"method":"cash"}],  # partial
-        [{"amount":5000,"method":"nhif"}],  # partial
-        [{"amount":4000,"method":"mpesa"}], # partial
-        None, None,  # finalized (no payment yet)
-        [],  # waived — discount covers full amount, no payment collected
+        [{"amount":2750,"method":"sha"},{"amount":500,"method":"cash"}],
+        [{"amount":9600,"method":"sha"},{"amount":2600,"method":"card"}],
+        None, None, None, None,
+        [{"amount":3000,"method":"cash"}],
+        [{"amount":5000,"method":"sha"}],
+        [{"amount":4000,"method":"mpesa"}],
+        None, None,
+        [],
     ]
 
     for i in range(15):
@@ -817,12 +853,12 @@ def build_bills(visit_ids, visits):
     return bills
 
 
-# Seeder
+# Populate the database with simulation data.
 def seed(fresh=False):
     client = MongoClient(MONGO_URI)
     db = client[MONGO_DB]
 
-    collections = ["users","departments","beds","patients","visits",
+    collections = ["users","departments","beds","consultation_rooms","patients","visits",
                    "prescriptions","audit_records","bills"]
 
     if not fresh:
@@ -837,18 +873,18 @@ def seed(fresh=False):
             db[c].delete_many({})
         print("Cleared all simulation collections.\n")
 
-    # Build data
+    import seed_data
+
     users, user_ids            = build_users()
     departments, dept_map      = build_departments()
     beds, bed_ids              = build_beds(dept_map)
-    patients, patient_ids      = build_patients()
-    visits, visit_ids          = build_visits(patient_ids, dept_map, user_ids)
-    prescriptions, rx_ids      = build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids)
-    audit_records              = build_audit_records(rx_ids, prescriptions, user_ids)
-    bills                      = build_bills(visit_ids, visits)
+    consultation_rooms         = build_consultation_rooms(dept_map, user_ids)
+    patients, patient_ids      = seed_data.build_patients()
+    visits, visit_ids          = seed_data.build_visits(patient_ids, dept_map, user_ids, bed_ids)
+    prescriptions, rx_ids      = seed_data.build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids)
+    audit_records              = seed_data.build_audit_records(rx_ids, prescriptions, user_ids)
+    bills                      = seed_data.build_bills(visit_ids, visits)
 
-    # Back-fill prescription_ids into visits
-    # Map visit_id → prescription_ids
     visit_rx_map = {}
     for rx in prescriptions:
         vid = rx.get("visit_id")
@@ -860,12 +896,22 @@ def seed(fresh=False):
         if v_sid in visit_rx_map:
             v["prescription_ids"] = [sid(r) for r in visit_rx_map[v_sid]]
 
-    # Insert
+    occupied_bed_ids = {v["bed_id"] for v in visits
+                        if v.get("bed_id") and v["status"] in ("admitted", "in_ward", "ready_for_discharge")}
+    bed_patient = {v["bed_id"]: v["patient_id"] for v in visits
+                   if v.get("bed_id") and v["status"] in ("admitted", "in_ward", "ready_for_discharge")}
+    for b in beds:
+        bid = sid(b["_id"])
+        if bid in occupied_bed_ids:
+            b["status"] = "occupied"
+            b["current_patient_id"] = bed_patient.get(bid)
+
     results = {}
     for name, docs in [
         ("users",          users),
         ("departments",    departments),
         ("beds",           beds),
+        ("consultation_rooms", consultation_rooms),
         ("patients",       patients),
         ("visits",         visits),
         ("prescriptions",  prescriptions),
@@ -880,7 +926,6 @@ def seed(fresh=False):
 
     client.close()
 
-    # Summary table
     print("=" * 45)
     print(f"{'Collection':<20} {'Inserted':>10}")
     print("-" * 45)
@@ -894,7 +939,6 @@ def seed(fresh=False):
     print("Simulation data seeded successfully.")
 
 
-# Entry point
 if __name__ == "__main__":
     fresh_flag = "--fresh" in sys.argv
     seed(fresh=fresh_flag)

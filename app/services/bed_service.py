@@ -12,11 +12,13 @@ from app.models.bed import (
 )
 
 
+# Convert a bed document to a Bed model.
 def doc_to_bed(doc: dict) -> BedInDB:
     doc["id"] = str(doc["_id"])
     return BedInDB(**doc)
 
 
+# List beds, optionally filtered by ward, status, or type.
 async def get_all_beds(
     db: AsyncDatabase,
     department_id: Optional[str] = None,
@@ -41,6 +43,7 @@ async def get_all_beds(
     return beds
 
 
+# Fetch a single bed by its ID.
 async def get_bed_by_id(db: AsyncDatabase, bed_id: str) -> Optional[BedInDB]:
     try:
         obj_id = ObjectId(bed_id)
@@ -53,6 +56,7 @@ async def get_bed_by_id(db: AsyncDatabase, bed_id: str) -> Optional[BedInDB]:
     return doc_to_bed(doc)
 
 
+# Fetch a bed by its label (e.g. GW-001).
 async def get_bed_by_label(
     db: AsyncDatabase, department_id: str, bed_label: str
 ) -> Optional[BedInDB]:
@@ -62,6 +66,7 @@ async def get_bed_by_label(
     return doc_to_bed(doc)
 
 
+# List all beds in a department.
 async def get_beds_by_department(
     db: AsyncDatabase, department_id: str
 ) -> List[BedWithPatient]:
@@ -97,6 +102,7 @@ async def get_beds_by_department(
     return beds
 
 
+# Add a new bed.
 async def create_bed(db: AsyncDatabase, data: BedCreate) -> BedInDB:
     now = datetime.now(timezone.utc)
     doc = data.model_dump()
@@ -109,6 +115,7 @@ async def create_bed(db: AsyncDatabase, data: BedCreate) -> BedInDB:
     return doc_to_bed(doc)
 
 
+# Update a bed's fields.
 async def update_bed(
     db: AsyncDatabase, bed_id: str, data: BedUpdate
 ) -> Optional[BedInDB]:
@@ -137,6 +144,7 @@ async def update_bed(
     return doc_to_bed(result)
 
 
+# Place a patient in a bed and mark it occupied.
 async def assign_patient_to_bed(
     db: AsyncDatabase,
     bed_id: str,
@@ -166,6 +174,7 @@ async def assign_patient_to_bed(
     return doc_to_bed(result)
 
 
+# Free a bed and send it to cleaning.
 async def release_bed(db: AsyncDatabase, bed_id: str) -> Optional[BedInDB]:
     try:
         obj_id = ObjectId(bed_id)
@@ -190,6 +199,7 @@ async def release_bed(db: AsyncDatabase, bed_id: str) -> Optional[BedInDB]:
     return doc_to_bed(result)
 
 
+# Mark a cleaned bed as available again.
 async def mark_bed_cleaned(db: AsyncDatabase, bed_id: str) -> Optional[BedInDB]:
     try:
         obj_id = ObjectId(bed_id)
@@ -213,6 +223,7 @@ async def mark_bed_cleaned(db: AsyncDatabase, bed_id: str) -> Optional[BedInDB]:
     return doc_to_bed(result)
 
 
+# Per-department counts of available/occupied beds.
 async def get_bed_availability_summary(
     db: AsyncDatabase,
 ) -> List[BedAvailabilitySummary]:
@@ -271,6 +282,7 @@ async def get_bed_availability_summary(
     return summaries
 
 
+# List free beds of a given type.
 async def get_available_beds_by_type(
     db: AsyncDatabase, bed_type: str, department_id: Optional[str] = None
 ) -> List[BedInDB]:
@@ -285,6 +297,7 @@ async def get_available_beds_by_type(
     return beds
 
 
+# Insert several beds at once.
 async def bulk_create_beds(db: AsyncDatabase, beds_data: List[BedCreate]) -> int:
     if not beds_data:
         return 0

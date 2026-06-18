@@ -4,6 +4,7 @@ from bson import ObjectId
 from pymongo.asynchronous.database import AsyncDatabase
 
 
+# Average a list, returning None when empty.
 def _safe_avg(values: list) -> float:
     filtered = [v for v in values if v is not None]
     if not filtered:
@@ -11,6 +12,7 @@ def _safe_avg(values: list) -> float:
     return round(sum(filtered) / len(filtered), 2)
 
 
+# Compute the 95th-percentile value of a list.
 def _calc_p95(values: list) -> float:
     if not values:
         return 0.0
@@ -19,6 +21,7 @@ def _calc_p95(values: list) -> float:
     return round(sorted_vals[idx], 2)
 
 
+# Aggregate turnaround-time metrics over a date range.
 async def get_tat_metrics(
     db: AsyncDatabase,
     start_date: Optional[datetime] = None,
@@ -170,7 +173,6 @@ async def get_tat_metrics(
         if p.get("ordered_at") and isinstance(p["ordered_at"], datetime):
             p["ordered_at"] = p["ordered_at"].isoformat()
 
-    # Enrich slowest prescriptions with patient names
     if slowest:
         patient_ids = list({p["patient_id"] for p in slowest if p.get("patient_id")})
         patients = await db.patients.find(
@@ -198,6 +200,7 @@ async def get_tat_metrics(
     }
 
 
+# Zeroed TAT metrics for when there's no data.
 def _empty_tat_metrics() -> dict:
     return {
         "total_prescriptions": 0,
@@ -213,7 +216,7 @@ def _empty_tat_metrics() -> dict:
     }
 
 
-# Alias used by sla_scanner.generate_daily_report
+# Headline TAT figures over a date range.
 async def get_tat_summary(
     db: AsyncDatabase,
     start_date: Optional[datetime] = None,
@@ -222,11 +225,11 @@ async def get_tat_summary(
     return await get_tat_metrics(db, start_date=start_date, end_date=end_date)
 
 
+# Return daily TAT averages for the past N days using stored daily_reports.
 async def get_tat_history(
     db: AsyncDatabase,
     days: int = 30,
 ) -> List[Dict[str, Any]]:
-    """Return daily TAT averages for the past N days using stored daily_reports."""
     cursor = db.daily_reports.find({}).sort("date", -1).limit(days)
     docs = await cursor.to_list(length=days)
     result = []
@@ -245,14 +248,15 @@ async def get_tat_history(
     return list(reversed(result))
 
 
+# TAT metrics computed only from prescriptions ordered today.
 async def get_live_tat(db: AsyncDatabase) -> dict:
-    """TAT metrics computed only from prescriptions ordered today."""
     from datetime import timezone, timedelta
     now = datetime.now(timezone.utc)
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     return await get_tat_metrics(db, start_date=start, end_date=now)
 
 
+# Find the slowest stage in the prescription pipeline.
 async def get_bottleneck_analysis(
     db: AsyncDatabase,
     start_date: Optional[datetime] = None,
@@ -325,6 +329,7 @@ async def get_bottleneck_analysis(
 
     row = result[0]
 
+    # Build the per-person stats row.
     def _stats(values: list) -> dict:
         clean = [v for v in values if v is not None]
         return {
@@ -341,6 +346,7 @@ async def get_bottleneck_analysis(
     }
 
 
+# Per-staff performance figures for doctors or pharmacists.
 async def get_performance_stats(
     db: AsyncDatabase,
     role: str,

@@ -3,7 +3,6 @@ from pymongo.asynchronous.database import AsyncDatabase
 from app.services import audit_service, analytics_service
 from app.ws.manager import manager
 
-# Fallback thresholds used when DB config is missing for a priority
 _DEFAULT_SLA_THRESHOLDS = {
     "stat": 15,
     "urgent": 30,
@@ -18,44 +17,50 @@ _SLA_PRIORITY_NAMES = list(_DEFAULT_SLA_THRESHOLDS.keys())
 _WARNING_FRACTION = 0.75
 
 
+# Look up threshold from DB config, falling back to the hardcoded default.
 async def _get_threshold(db: AsyncDatabase, priority: str) -> int:
-    """Look up threshold from DB config, falling back to the hardcoded default."""
     doc = await db.sla_config.find_one({"priority": priority})
     if doc and doc.get("threshold_min") is not None:
         return int(doc["threshold_min"])
     return _DEFAULT_SLA_THRESHOLDS.get(priority, 60)
 
 
+# Run the SLA breach scan for every priority.
 async def scan_all_slas(db: AsyncDatabase):
     for priority in _SLA_PRIORITY_NAMES:
         await _scan_priority(db, priority)
 
+# Scan STAT prescriptions for SLA breaches.
 async def scan_stat_slas(db: AsyncDatabase):
     await _scan_priority(db, "stat")
 
+# Scan urgent prescriptions for SLA breaches.
 async def scan_urgent_slas(db: AsyncDatabase):
     await _scan_priority(db, "urgent")
 
+# Scan routine prescriptions for SLA breaches.
 async def scan_routine_slas(db: AsyncDatabase):
     await _scan_priority(db, "routine")
 
+# Scan NICU prescriptions for SLA breaches.
 async def scan_nicu_slas(db: AsyncDatabase):
     await _scan_priority(db, "nicu")
 
+# Scan discharge prescriptions for SLA breaches.
 async def scan_discharge_slas(db: AsyncDatabase):
     await _scan_priority(db, "discharge")
 
+# Scan chemo prescriptions for SLA breaches.
 async def scan_chemo_slas(db: AsyncDatabase):
     await _scan_priority(db, "chemo")
 
+# Detect SLA warnings and breaches for a given priority.
 async def _scan_priority(db: AsyncDatabase, priority: str):
-    """Detect SLA warnings and breaches for a given priority."""
     threshold_min = await _get_threshold(db, priority)
     now = datetime.now(timezone.utc)
     warning_cutoff = now - timedelta(minutes=threshold_min * _WARNING_FRACTION)
     breach_cutoff = now - timedelta(minutes=threshold_min)
 
-    # Find all active prescriptions for this priority that are not yet breached
     query = {
         "status": {"$in": ["submitted", "flagged"]},
         "priority": priority,
@@ -74,7 +79,6 @@ async def _scan_priority(db: AsyncDatabase, priority: str):
         rx_id_str = str(rx["_id"])
 
         if elapsed_min >= threshold_min:
-            # Full breach - check for duplicate
             existing_breach = await db.audit_records.find_one({
                 "prescription_id": rx_id_str,
                 "flag_code": "sla_breach",
@@ -141,7 +145,6 @@ async def _scan_priority(db: AsyncDatabase, priority: str):
 
         elif elapsed_min >= threshold_min * _WARNING_FRACTION:
             
-            # Warning threshold - check for duplicate
             existing_warning = await db.audit_records.find_one({
                 "prescription_id": rx_id_str,
                 "flag_code": "sla_warning",
@@ -194,10 +197,12 @@ async def _scan_priority(db: AsyncDatabase, priority: str):
             })
 
 
+# Escalate flags that have been open too long.
 async def run_flag_escalation(db: AsyncDatabase):
     await audit_service.escalate_overdue_flags(db)
 
 
+# Build and store the daily TAT/SLA report.
 async def generate_daily_report(db: AsyncDatabase):
     from datetime import timezone as tz
     yesterday = datetime.now(tz.utc) - timedelta(days=1)

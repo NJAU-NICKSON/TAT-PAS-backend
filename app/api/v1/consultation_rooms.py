@@ -15,6 +15,7 @@ from app.services import consultation_room_service
 router = APIRouter(prefix="/consultation-rooms", tags=["consultation-rooms"])
 
 
+# List consultation rooms.
 @router.get("", response_model=List[ConsultationRoomWithOccupants])
 async def list_rooms(
     department_id: Optional[str] = Query(None),
@@ -27,6 +28,7 @@ async def list_rooms(
     )
 
 
+# Fetch one room by ID.
 @router.get("/{room_id}", response_model=ConsultationRoomWithOccupants)
 async def get_room(
     room_id: str,
@@ -39,6 +41,7 @@ async def get_room(
     return room
 
 
+# Add a consultation room.
 @router.post("", response_model=ConsultationRoomResponse, status_code=status.HTTP_201_CREATED)
 async def create_room(
     data: ConsultationRoomCreate,
@@ -48,6 +51,7 @@ async def create_room(
     return await consultation_room_service.create_room(db, data)
 
 
+# Update a consultation room.
 @router.patch("/{room_id}", response_model=ConsultationRoomWithOccupants)
 async def update_room(
     room_id: str,
@@ -61,6 +65,7 @@ async def update_room(
     return room
 
 
+# Remove a consultation room.
 @router.delete("/{room_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_room(
     room_id: str,

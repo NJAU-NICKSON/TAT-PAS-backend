@@ -5,6 +5,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 from app.models.audit import AuditSeverity
 
 
+# Result of a single safety-rule check.
 @dataclass
 class FlagResult:
     code: str
@@ -15,6 +16,7 @@ class FlagResult:
     dose: str
 
 
+# Run every safety rule against a prescription and collect flags.
 async def check_all_rules(prescription: dict, patient: dict, active_rxs: List[dict], db: AsyncDatabase) -> List[FlagResult]:
     flags = []
     
@@ -38,6 +40,7 @@ async def check_all_rules(prescription: dict, patient: dict, active_rxs: List[di
     return flags
 
 
+# Flag a dose above the safe maximum.
 async def check_high_dose(med: dict) -> List[FlagResult]:
     dose = med.get("dose", "")
     matches = re.findall(r"(\d+(?:\.\d+)?)\s*mg", dose, re.IGNORECASE)
@@ -56,6 +59,7 @@ async def check_high_dose(med: dict) -> List[FlagResult]:
     return []
 
 
+# Flag a course that runs longer than recommended.
 async def check_extended_duration(med: dict) -> List[FlagResult]:
     duration = med.get("duration_days", 0)
     if duration > 30:
@@ -70,6 +74,7 @@ async def check_extended_duration(med: dict) -> List[FlagResult]:
     return []
 
 
+# Flag a drug the patient is already on.
 async def check_duplicate_active_rx(med: dict, active_rxs: List[dict]) -> List[FlagResult]:
     drug_name = med.get("name", "").lower()
     
@@ -87,6 +92,7 @@ async def check_duplicate_active_rx(med: dict, active_rxs: List[dict]) -> List[F
     return []
 
 
+# Flag a drug the patient is allergic to.
 async def check_allergy_match(med: dict, patient: dict) -> List[FlagResult]:
     drug_name = med.get("name", "").lower()
     allergies = patient.get("allergies") or []
@@ -109,6 +115,7 @@ async def check_allergy_match(med: dict, patient: dict) -> List[FlagResult]:
     return []
 
 
+# Flag interactions with the patient's other drugs.
 async def check_drug_drug_interaction(med: dict, prescription: dict, db: AsyncDatabase) -> List[FlagResult]:
     drug_name = med.get("name", "").lower()
     other_meds = [m.get("name", "").lower() for m in prescription.get("medications", []) if m.get("name", "").lower() != drug_name]
@@ -133,6 +140,7 @@ async def check_drug_drug_interaction(med: dict, prescription: dict, db: AsyncDa
     return []
 
 
+# Flag controlled or scheduled drugs.
 async def check_controlled_substance(med: dict, db: AsyncDatabase) -> List[FlagResult]:
     drug_name = med.get("name", "").lower()
     controlled = await db.controlled_substances.find_one({"name": {"$regex": f"^{re.escape(drug_name)}$", "$options": "i"}})
@@ -149,6 +157,7 @@ async def check_controlled_substance(med: dict, db: AsyncDatabase) -> List[FlagR
     return []
 
 
+# Flag doses unsafe for a child's weight.
 async def check_paediatric_dose(med: dict, patient: dict) -> List[FlagResult]:
     dose_per_kg = med.get("dose_per_kg")
     if dose_per_kg and dose_per_kg > 25:
@@ -163,6 +172,7 @@ async def check_paediatric_dose(med: dict, patient: dict) -> List[FlagResult]:
     return []
 
 
+# Flag drugs unsafe for neonates.
 async def check_neonatal(med: dict) -> List[FlagResult]:
     return [FlagResult(
         code="neonatal_rx",
@@ -174,6 +184,7 @@ async def check_neonatal(med: dict) -> List[FlagResult]:
     )]
 
 
+# Flag drugs risky in pregnancy.
 async def check_pregnancy_risk(med: dict, db: AsyncDatabase) -> List[FlagResult]:
     drug_name = med.get("name", "").lower()
     category_x = await db.category_x_drugs.find_one({"name": {"$regex": f"^{re.escape(drug_name)}$", "$options": "i"}})

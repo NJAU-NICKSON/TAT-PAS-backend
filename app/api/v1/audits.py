@@ -5,7 +5,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 from pydantic import BaseModel, Field
 from datetime import date
 from app.db.client import get_database
-from app.models.audit import AuditRecordResponse, CountersignRequest
+from app.models.audit import AuditRecordResponse, CountersignRequest, ResolutionType
 from app.security.rbac import Roles, require_roles
 from app.services.audit_service import (
     get_audit_by_id,
@@ -17,21 +17,25 @@ from app.services.audit_service import (
     get_security_events_for_day,
     mark_events_reviewed,
     create_audit_record,
+    verify_chain_integrity,
 )
 from app.services.prescription_service import add_flag
 
 router = APIRouter(prefix="/audits", tags=["audits"])
 
 
+# Request body to resolve a prescription's flags.
 class ResolveAuditRequest(BaseModel):
     resolution_note: str = Field(..., min_length=3)
-    resolution_type: str
+    resolution_type: ResolutionType
 
 
+# Request body to mark security events reviewed.
 class ReviewSecurityRequest(BaseModel):
     event_ids: List[str]
 
 
+# Request body to raise a manual flag.
 class FlagCreateRequest(BaseModel):
     prescription_id: str
     issue: str = Field(..., min_length=5)
@@ -42,13 +46,13 @@ class FlagCreateRequest(BaseModel):
     dose: Optional[str] = None
 
 
+# Create a manual audit flag on a prescription.
 @router.post("/flag", response_model=AuditRecordResponse, status_code=status.HTTP_201_CREATED)
 async def create_flag(
     body: FlagCreateRequest,
     current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """Create a manual audit flag on a prescription."""
     record = await create_audit_record(
         db=db,
         prescription_id=body.prescription_id,
@@ -66,6 +70,7 @@ async def create_flag(
     return record
 
 
+# All unresolved clinical flags, sorted by severity then age.
 @router.get("/unresolved", response_model=list[AuditRecordResponse])
 async def list_unresolved(
     skip: int = Query(0, ge=0),
@@ -73,10 +78,19 @@ async def list_unresolved(
     current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """All unresolved clinical flags, sorted by severity then age."""
     return await get_unresolved_audit_records(db, skip=skip, limit=limit)
 
 
+# Verify the tamper-evident hash chain over all audit records.
+@router.get("/verify-integrity")
+async def verify_integrity(
+    current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
+    db: AsyncDatabase = Depends(get_database),
+):
+    return await verify_chain_integrity(db)
+
+
+# Full immutable audit log. Append-only. Filterable. Paginated.
 @router.get("/log", response_model=list[AuditRecordResponse])
 async def audit_log(
     prescription_id: Optional[str] = Query(None),
@@ -90,7 +104,6 @@ async def audit_log(
     current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """Full immutable audit log. Append-only. Filterable. Paginated."""
     return await get_audit_log(
         db,
         skip=skip,
@@ -104,6 +117,7 @@ async def audit_log(
     )
 
 
+# List audit records with filters and paging.
 @router.get("/", response_model=list[AuditRecordResponse])
 async def list_audits(
     prescription_id: Optional[str] = Query(None),
@@ -118,6 +132,7 @@ async def list_audits(
     )
 
 
+# Security events for a given day.
 @router.get("/security/daily", response_model=list[AuditRecordResponse])
 async def get_daily_security_events(
     review_date: date = Query(..., description="Date in YYYY-MM-DD format"),
@@ -129,6 +144,7 @@ async def get_daily_security_events(
     return await get_security_events_for_day(db, review_date, skip=skip, limit=limit)
 
 
+# Mark security events as reviewed.
 @router.post("/security/review", status_code=status.HTTP_200_OK)
 async def review_security_events(
     body: ReviewSecurityRequest,
@@ -139,18 +155,13 @@ async def review_security_events(
     return {"reviewed_count": count}
 
 
+# Countersign a HIGH or CRITICAL severity flag.
 @router.post("/countersign", response_model=AuditRecordResponse, status_code=status.HTTP_201_CREATED)
 async def countersign_flag(
     body: CountersignRequest,
     current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """
-    Countersign a HIGH or CRITICAL severity flag.
-
-    The countersigning auditor must not be the same user who created the original flag.
-    A countersign record is required before HIGH severity flags can be resolved.
-    """
     return await countersign_audit(
         db=db,
         flag_id=body.flag_id,
@@ -160,6 +171,7 @@ async def countersign_flag(
     )
 
 
+# Fetch one audit record by ID.
 @router.get("/{audit_id}", response_model=AuditRecordResponse)
 async def get_audit(
     audit_id: str,
@@ -179,6 +191,7 @@ async def get_audit(
     return record
 
 
+# Resolve all open flags on a prescription.
 @router.post("/{prescription_id}/resolve", response_model=list[AuditRecordResponse])
 async def resolve_prescription_audits(
     prescription_id: str,
@@ -186,16 +199,10 @@ async def resolve_prescription_audits(
     current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """
-    Resolve all open flags on a prescription.
-
-    HIGH severity flags that require countersign will block resolution until
-    a countersign record exists from a different auditor.
-    """
     return await resolve_audit_record(
         prescription_id=prescription_id,
         resolution_note=body.resolution_note,
-        resolution_type=body.resolution_type,
+        resolution_type=body.resolution_type.value,
         auditor=current_user,
         db=db,
     )

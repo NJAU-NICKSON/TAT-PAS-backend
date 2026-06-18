@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from enum import Enum
 
 
+# Kinds of audit records (automated, manual, etc.).
 class AuditType(str, Enum):
     automated = "automated"
     manual = "manual"
@@ -14,6 +15,7 @@ class AuditType(str, Enum):
     resolution = "resolution"
 
 
+# Severity levels for a flag.
 class AuditSeverity(str, Enum):
     low = "low"
     medium = "medium"
@@ -21,6 +23,7 @@ class AuditSeverity(str, Enum):
     critical = "critical"
 
 
+# Allowed ways to resolve a flag.
 class ResolutionType(str, Enum):
     accepted_risk = "accepted_risk"
     dose_adjusted = "dose_adjusted"
@@ -29,6 +32,7 @@ class ResolutionType(str, Enum):
     false_positive = "false_positive"
 
 
+# Kinds of security events.
 class SecurityEventType(str, Enum):
     login_failure = "login_failure"
     role_change = "role_change"
@@ -37,6 +41,7 @@ class SecurityEventType(str, Enum):
     permission_change = "permission_change"
 
 
+# Shared audit-record fields.
 class AuditRecordBase(BaseModel):
     prescription_id: str
     visit_id: Optional[str] = None
@@ -60,18 +65,14 @@ class AuditRecordBase(BaseModel):
     resolved_at: Optional[datetime] = None
     resolution_type: Optional[ResolutionType] = None
     resolution_note: Optional[str] = None
-    # Countersign fields
     countersigned: bool = False
     countersigned_by: Optional[str] = None
     countersigned_at: Optional[datetime] = None
     countersign_note: Optional[str] = None
-    # Links between records
     original_flag_id: Optional[str] = None
-    # Legacy e-signature fields kept for schema compatibility
     esig_required: Optional[bool] = None
     esig_confirmed_by: Optional[str] = None
     esig_confirmed_at: Optional[datetime] = None
-    # Snapshots stored as JSON-safe dicts (no ObjectId)
     before_snapshot: Optional[Dict[str, Any]] = None
     after_snapshot: Optional[Dict[str, Any]] = None
     ip_address: Optional[str] = None
@@ -85,14 +86,17 @@ class AuditRecordBase(BaseModel):
     patient_name: Optional[str] = None
 
 
+# Audit record as stored in the database.
 class AuditRecordInDB(AuditRecordBase):
     id: str
 
 
+# Audit record returned by the API.
 class AuditRecordResponse(AuditRecordBase):
     id: str
 
 
+# Request body to countersign a flag.
 class CountersignRequest(BaseModel):
     flag_id: str = Field(..., description="ID of the original flag record to countersign")
     note: str = Field(..., min_length=10, description="Attestation note from countersigning auditor")

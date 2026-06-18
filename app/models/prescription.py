@@ -3,6 +3,7 @@ from enum import Enum
 from typing import Optional, List
 from pydantic import BaseModel, ConfigDict, Field
 
+# Where a prescription was ordered from.
 class OrderSource(str, Enum):
     opd = "opd"
     ipd = "ipd"
@@ -13,6 +14,7 @@ class OrderSource(str, Enum):
     nicu = "nicu"
     discharge = "discharge"
 
+# Prescription priority levels.
 class Priority(str, Enum):
     stat = "stat"
     urgent = "urgent"
@@ -21,6 +23,7 @@ class Priority(str, Enum):
     nicu = "nicu"
     chemo = "chemo"
 
+# A single medication line.
 class MedicationItem(BaseModel):
     name: str
     dose: str
@@ -31,27 +34,31 @@ class MedicationItem(BaseModel):
     is_high_alert: bool = False
     is_controlled: bool = False
 
+# Prescription workflow states.
 class PrescriptionStatus(str, Enum):
     draft = "draft"
     submitted = "submitted"
-    pending_amendment = "pending_amendment"  # auditor returned to doctor
+    pending_amendment = "pending_amendment"
     flagged = "flagged"
     verified = "verified"
     dispensed = "dispensed"
     administered = "administered"
     archived = "archived"
 
+# Shared prescription fields.
 class PrescriptionBase(BaseModel):
     patient_id: str
     medications: List[MedicationItem]
     notes: Optional[str] = None
 
+# Fields for creating a prescription.
 class PrescriptionCreate(PrescriptionBase):
     visit_id: Optional[str] = None
     department_id: Optional[str] = None
     priority: Priority = Priority.routine
     order_source: OrderSource = OrderSource.opd
 
+# Fields for updating a prescription.
 class PrescriptionUpdate(BaseModel):
     status: Optional[PrescriptionStatus] = None
     notes: Optional[str] = None
@@ -63,6 +70,7 @@ class PrescriptionUpdate(BaseModel):
     administration_notes: Optional[str] = None
     receipt_number: Optional[str] = None
 
+# Prescription as stored, with TAT fields.
 class PrescriptionInDB(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -83,7 +91,6 @@ class PrescriptionInDB(BaseModel):
     administered_route: Optional[str] = None
     administration_notes: Optional[str] = None
     receipt_number: Optional[str] = None
-    # Auditor accountability
     auditor_id: Optional[str] = None
     auditor_name: Optional[str] = None
     auditor_approved_at: Optional[datetime] = None
@@ -109,7 +116,7 @@ class PrescriptionInDB(BaseModel):
     sla_threshold_min: Optional[float] = None
     sla_breached: bool = False
     sla_breach_duration_min: Optional[float] = None
-    tat_breached_at: Optional[datetime] = None   # added
+    tat_breached_at: Optional[datetime] = None
     
     flags: List[str] = Field(default_factory=list)
     notes: Optional[str] = None

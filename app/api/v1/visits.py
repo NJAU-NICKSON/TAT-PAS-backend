@@ -12,6 +12,7 @@ from app.services import visit_service
 router = APIRouter(prefix="/visits", tags=["visits"])
 
 
+# Register a new visit.
 @router.post("", response_model=VisitResponse)
 async def create_visit(
     data: VisitCreate,
@@ -25,6 +26,7 @@ async def create_visit(
     return visit
 
 
+# List visits with filters.
 @router.get("", response_model=list[VisitResponse])
 async def list_visits(
     patient_id: Optional[str] = Query(None),
@@ -44,6 +46,7 @@ async def list_visits(
     return visits
 
 
+# Fetch one visit by ID.
 @router.get("/{visit_id}", response_model=VisitResponse)
 async def get_visit(
     visit_id: str,
@@ -56,6 +59,7 @@ async def get_visit(
     return visit
 
 
+# Update a visit's status or clinical fields.
 @router.patch("/{visit_id}", response_model=VisitResponse)
 async def update_visit(
     visit_id: str,
@@ -69,6 +73,7 @@ async def update_visit(
     return visit
 
 
+# Save the doctor's consultation note.
 @router.post("/{visit_id}/consultation-note", response_model=ConsultationNote)
 async def add_consultation_note(
     visit_id: str,
@@ -84,6 +89,7 @@ async def add_consultation_note(
     return note
 
 
+# Fetch a visit's consultation note.
 @router.get("/{visit_id}/consultation-note", response_model=ConsultationNote)
 async def get_consultation_note(
     visit_id: str,
@@ -96,6 +102,7 @@ async def get_consultation_note(
     return note
 
 
+# Record triage and assign a doctor/room.
 @router.post("/{visit_id}/triage", response_model=VisitResponse)
 async def triage_visit(
     visit_id: str,
@@ -111,6 +118,7 @@ async def triage_visit(
     return visit
 
 
+# Admit a patient: assign bed + mark visit as admitted.
 @router.post("/{visit_id}/admit", response_model=VisitResponse)
 async def admit_patient(
     visit_id: str,
@@ -118,8 +126,7 @@ async def admit_patient(
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
 ):
-    """Admit a patient: assign bed + mark visit as admitted."""
-    if current_user.role not in ["nurse", "admin", "doctor"]:
+    if current_user.role not in ["nurse", "admin", "doctor", "receptionist"]:
         raise HTTPException(status_code=403, detail="Not authorized to admit patients")
     visit = await visit_service.admit_patient(visit_id, data, current_user.id, db)
     if visit is None:
@@ -127,21 +134,25 @@ async def admit_patient(
     return visit
 
 
+# Discharge patient and release their bed back to cleaning.
 @router.post("/{visit_id}/discharge", response_model=VisitResponse)
 async def discharge_patient(
     visit_id: str,
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
 ):
-    """Discharge patient and release their bed back to cleaning."""
-    if current_user.role not in ["nurse", "admin", "doctor", "auditor"]:
+    if current_user.role not in ["receptionist", "nurse", "admin"]:
         raise HTTPException(status_code=403, detail="Not authorized to discharge patients")
-    visit = await visit_service.discharge_patient(visit_id, current_user.id, db)
+    try:
+        visit = await visit_service.discharge_patient(visit_id, current_user.id, db)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if visit is None:
         raise HTTPException(status_code=404, detail="Visit not found")
     return visit
 
 
+# Stage-by-stage journey and TAT for a visit.
 @router.get("/{visit_id}/journey")
 async def get_visit_journey(
     visit_id: str,
@@ -154,6 +165,7 @@ async def get_visit_journey(
     return await visit_service.build_journey_summary(visit, db)
 
 
+# List prescriptions on a visit.
 @router.get("/{visit_id}/prescriptions")
 async def get_visit_prescriptions(
     visit_id: str,

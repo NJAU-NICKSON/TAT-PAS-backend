@@ -1,6 +1,6 @@
 # TAT-PAS Backend
 
-FastAPI backend for the **Turn-Around Time and Prescription Audit System (TAT-PAS)** — a hospital information system that tracks patient journey TAT, automates prescription safety audits, monitors SLA compliance, and surfaces bottleneck analytics.
+FastAPI backend for the **Turn-Around Time and Prescription Audit System (TAT-PAS)** - a hospital information system that tracks patient journey TAT, automates prescription safety audits, monitors SLA compliance, and surfaces bottleneck analytics.
 
 ## Requirements
 
@@ -11,11 +11,11 @@ FastAPI backend for the **Turn-Around Time and Prescription Audit System (TAT-PA
 
 ```bash
 python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+source .\venv\Scripts\Activate.ps1       
 pip install -r requirements.txt
-cp .env.example .env            # fill in values (see below)
-python setup_db.py              # run once — creates collections, indexes, and reference data
-python seed_simulation.py       # seed demo data (use --fresh to wipe and re-seed)
+cp .env.example .env            
+python setup_db.py              
+python seed_simulation.py       
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -37,7 +37,7 @@ ALLOWED_ORIGINS=["http://localhost:5173"]
 |---|---|---|
 | `MONGO_URI` | `mongodb://localhost:27017` | MongoDB connection string |
 | `MONGO_DB` | `tatpas` | Database name |
-| `JWT_SECRET` | — | Required. Use a long random string in production |
+| `JWT_SECRET` | - | Required. Use a long random string in production |
 | `JWT_ALGORITHM` | `HS256` | |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `30` | |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | |
@@ -47,12 +47,12 @@ ALLOWED_ORIGINS=["http://localhost:5173"]
 
 ```
 app/
-├── api/v1/         Route handlers — one file per resource
+├── api/v1/         Route handlers - one file per resource
 ├── db/             MongoDB client and index creation
 ├── jobs/           APScheduler + SLA background scanner
 ├── models/         Pydantic models (request / response / DB)
 ├── security/       JWT helpers, password hashing, RBAC guards
-├── services/       Business logic — one file per domain
+├── services/       Business logic - one file per domain
 ├── ws/             WebSocket connection manager and router
 ├── config.py       Settings loaded from .env via Pydantic
 └── main.py         App factory, CORS, lifespan, middleware
@@ -68,14 +68,14 @@ setup_db.py         One-time DB initialisation (collections, indexes, reference 
 | `/api/v1/users` | User management (admin only) |
 | `/api/v1/patients` | Patient CRUD and search |
 | `/api/v1/visits` | Visit lifecycle, status transitions, patient journey TAT |
-| `/api/v1/prescriptions` | Prescription pipeline — create, submit, verify, dispense, administer |
+| `/api/v1/prescriptions` | Prescription pipeline - create, submit, verify, dispense, administer |
 | `/api/v1/bills` | Billing, payments, revenue summary |
 | `/api/v1/departments` | Department management |
 | `/api/v1/beds` | Bed availability and assignment |
 | `/api/v1/audits` | Audit records and countersign workflow |
 | `/api/v1/analytics` | TAT metrics, SLA compliance, bottleneck identification |
 | `/api/v1/sla` | SLA configuration per prescription priority |
-| `/ws` | WebSocket — role-based real-time events |
+| `/ws` | WebSocket - role-based real-time events |
 
 ## Roles
 
@@ -91,7 +91,7 @@ setup_db.py         One-time DB initialisation (collections, indexes, reference 
 
 ## Patient journey stages
 
-The system tracks TAT across 7 sequential stages per visit. Each stage only activates after the previous one completes — the prescription audit cannot begin before the doctor ends the consultation.
+The system tracks TAT across 7 sequential stages per visit. Each stage only activates after the previous one completes - the prescription audit cannot begin before the doctor ends the consultation.
 
 | Stage | Name | Role | Target |
 |---|---|---|---|
@@ -124,7 +124,7 @@ A flagged prescription must be reviewed and countersigned by an auditor before t
 
 ## WebSocket
 
-Connect to `ws://localhost:8000/ws`. Send the JWT in the first message — not in the URL.
+Connect to `ws://localhost:8000/ws`. Send the JWT in the first message - not in the URL.
 
 ```json
 // Authenticate
@@ -155,7 +155,7 @@ The server sends `{"type":"ping"}` every 25 seconds. Role-based rooms: `pharmacy
 - High-alert drugs
 - Pregnancy category X drugs
 
-Safe to re-run — it updates existing documents rather than dropping collections.
+Safe to re-run - it updates existing documents rather than dropping collections.
 
 `seed_simulation.py` populates demo data for development and system demonstrations:
 

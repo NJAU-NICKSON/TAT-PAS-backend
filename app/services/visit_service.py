@@ -6,6 +6,7 @@ from pymongo.errors import DuplicateKeyError
 from app.models.visit import VisitCreate, VisitInDB, VisitUpdate, VisitStatus, VisitResponse, TriageSubmit, AdmitPatient, ConsultationNote, ConsultationNoteCreate
 
 
+# Produce the next visit number for today.
 async def generate_visit_number(db: AsyncDatabase) -> str:
     today = datetime.now(timezone.utc)
     date_prefix = today.strftime("%Y%m%d")
@@ -20,14 +21,12 @@ async def generate_visit_number(db: AsyncDatabase) -> str:
 
     seq = result.get("seq", 1)
 
-    # If the generated number already exists (counter desynced), advance to the true max
     prefix = f"V-{date_prefix}-"
     existing = await db.visits.find_one(
         {"visit_number": f"{prefix}{seq:04d}"},
         {"_id": 1},
     )
     if existing:
-        # Count how many visits exist for today and jump past them
         count = await db.visits.count_documents(
             {"visit_number": {"$regex": f"^{prefix}"}}
         )
@@ -41,6 +40,7 @@ async def generate_visit_number(db: AsyncDatabase) -> str:
     return f"{prefix}{seq:04d}"
 
 
+# Look up a staff member's display name.
 async def _get_user_name(db: AsyncDatabase, user_id: str) -> Optional[str]:
     if not user_id or not ObjectId.is_valid(user_id):
         return None
@@ -50,6 +50,7 @@ async def _get_user_name(db: AsyncDatabase, user_id: str) -> Optional[str]:
     return udoc.get("full_name") or udoc.get("username")
 
 
+# Register a new visit for a patient.
 async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase) -> VisitInDB:
     now = datetime.now(timezone.utc)
     visit_number = await generate_visit_number(db)
@@ -76,6 +77,7 @@ async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase)
         "bed_label": None,
         "prescription_ids": [],
         "registered_at": now,
+        "doctor_assigned_at": None,
         "triaged_at": None,
         "consultation_started_at": None,
         "consultation_ended_at": None,
@@ -99,6 +101,7 @@ async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase)
     return VisitInDB(**doc)
 
 
+# Look up a patient's display name.
 async def _get_patient_name(db: AsyncDatabase, patient_id: str) -> Optional[str]:
     if not patient_id or not ObjectId.is_valid(patient_id):
         return None
@@ -108,11 +111,10 @@ async def _get_patient_name(db: AsyncDatabase, patient_id: str) -> Optional[str]
     return f"{pdoc.get('first_name', '')} {pdoc.get('last_name', '')}".strip() or None
 
 
+# Attach patient_name and actor names to a visit document.
 async def _enrich_visit_doc(doc: dict, db: AsyncDatabase) -> dict:
-    """Attach patient_name and actor names to a visit document."""
     doc["patient_name"] = await _get_patient_name(db, str(doc.get("patient_id", "")))
 
-    # Enrich actor names if IDs are present but names are missing
     if doc.get("assigned_doctor_id") and not doc.get("assigned_doctor_name"):
         doc["assigned_doctor_name"] = await _get_user_name(db, str(doc["assigned_doctor_id"]))
     if doc.get("triage_nurse_id") and not doc.get("triage_nurse_name"):
@@ -122,18 +124,21 @@ async def _enrich_visit_doc(doc: dict, db: AsyncDatabase) -> dict:
     if doc.get("consultation_nurse_id") and not doc.get("consultation_nurse_name"):
         doc["consultation_nurse_name"] = await _get_user_name(db, str(doc["consultation_nurse_id"]))
 
-    # Enrich bed label if missing
     if doc.get("bed_id") and not doc.get("bed_label"):
         try:
-            bed_doc = await db.beds.find_one({"_id": ObjectId(str(doc["bed_id"]))}, {"label": 1, "ward_name": 1})
+            bed_doc = await db.beds.find_one(
+                {"_id": ObjectId(str(doc["bed_id"]))},
+                {"bed_label": 1, "ward_name": 1},
+            )
             if bed_doc:
-                doc["bed_label"] = bed_doc.get("label") or bed_doc.get("ward_name")
+                doc["bed_label"] = bed_doc.get("bed_label") or bed_doc.get("ward_name")
         except Exception:
             pass
 
     return doc
 
 
+# Fetch one visit by ID, with names attached.
 async def get_visit(visit_id: str, db: AsyncDatabase) -> Optional[VisitResponse]:
     try:
         obj_id = ObjectId(visit_id)
@@ -148,6 +153,7 @@ async def get_visit(visit_id: str, db: AsyncDatabase) -> Optional[VisitResponse]
     return VisitResponse(**doc)
 
 
+# List visits with filters and paging.
 async def list_visits(
     patient_id: Optional[str],
     status: Optional[str],
@@ -182,7 +188,6 @@ async def list_visits(
         doc["id"] = str(doc["_id"])
         docs.append(doc)
 
-    # batch fetch patient names
     pid_set = list({str(d.get("patient_id", "")) for d in docs if d.get("patient_id")})
     valid_pids = [ObjectId(pid) for pid in pid_set if ObjectId.is_valid(pid)]
     patient_map: dict = {}
@@ -198,8 +203,8 @@ async def list_visits(
     return visits
 
 
+# Update visit status and/or clinical fields.
 async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: AsyncDatabase) -> Optional[VisitResponse]:
-    """Update visit status and/or clinical fields."""
     try:
         obj_id = ObjectId(visit_id)
     except Exception:
@@ -231,8 +236,20 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
                     pass
 
     if data.assigned_doctor_id is not None:
+        doctor_doc = await db.users.find_one(
+            {"_id": ObjectId(data.assigned_doctor_id)},
+            {"role": 1},
+        )
+        if not doctor_doc or doctor_doc.get("role") != "doctor":
+            raise HTTPException(
+                status_code=422,
+                detail="assigned_doctor_id must reference a user with role 'doctor'",
+            )
         update_fields["assigned_doctor_id"] = data.assigned_doctor_id
         update_fields["assigned_doctor_name"] = await _get_user_name(db, data.assigned_doctor_id)
+        existing = await db.visits.find_one({"_id": obj_id}, {"doctor_assigned_at": 1})
+        if not (existing and existing.get("doctor_assigned_at")):
+            update_fields["doctor_assigned_at"] = now
 
     if data.chief_complaint is not None:
         update_fields["chief_complaint"] = data.chief_complaint
@@ -269,12 +286,13 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
     return VisitResponse(**result)
 
 
-# Keep backward-compat alias used by triage and admit internal callers
+# Change a visit's status and stamp the time.
 async def update_visit_status(visit_id: str, status: VisitStatus, user_id: str, db: AsyncDatabase) -> Optional[VisitResponse]:
     data = VisitUpdate(status=status)
     return await update_visit(visit_id, data, user_id, db)
 
 
+# Record triage vitals and move the visit forward.
 async def triage_visit(visit_id: str, data: TriageSubmit, nurse_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
     try:
         obj_id = ObjectId(visit_id)
@@ -314,36 +332,36 @@ async def triage_visit(visit_id: str, data: TriageSubmit, nurse_id: str, db: Asy
     return VisitResponse(**result)
 
 
+# Assign a bed and mark visit as admitted atomically.
 async def admit_patient(visit_id: str, data: AdmitPatient, user_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
-    """Assign a bed and mark visit as admitted atomically."""
     try:
         visit_obj_id = ObjectId(visit_id)
         bed_obj_id = ObjectId(data.bed_id)
     except Exception:
         return None
 
-    # Load visit
     visit_doc = await db.visits.find_one({"_id": visit_obj_id})
     if not visit_doc:
         return None
 
-    # Guard: admission requires clinical assessment — cannot admit a freshly registered patient
     admittable_statuses = {"triaged", "waiting_for_doctor", "in_consultation", "awaiting_results", "treatment_in_progress"}
     if visit_doc.get("status") not in admittable_statuses:
         return None
 
-    # Load bed — must be available and in the same department as the visit
     bed_doc = await db.beds.find_one({
         "_id": bed_obj_id,
         "status": {"$in": ["available", "reserved"]},
-        "department_id": visit_doc["department_id"],
     })
     if not bed_doc:
         return None
 
+    if data.assigned_doctor_id:
+        doctor_doc = await db.users.find_one({"_id": ObjectId(data.assigned_doctor_id)}, {"role": 1})
+        if not doctor_doc or doctor_doc.get("role") != "doctor":
+            raise HTTPException(status_code=422, detail="assigned_doctor_id must reference a user with role 'doctor'")
+
     now = datetime.now(timezone.utc)
 
-    # Mark bed occupied
     await db.beds.update_one(
         {"_id": bed_obj_id},
         {"$set": {
@@ -354,16 +372,21 @@ async def admit_patient(visit_id: str, data: AdmitPatient, user_id: str, db: Asy
         }}
     )
 
-    # Update visit
     update_fields = {
         "status": VisitStatus.admitted.value,
+        "visit_type": "ipd",
+        "department_id": bed_doc.get("department_id", visit_doc.get("department_id")),
         "admitted_at": now,
         "bed_id": data.bed_id,
+        "bed_label": bed_doc.get("bed_label"),
         "ward_name": bed_doc.get("ward_name"),
         "updated_at": now,
     }
     if data.notes:
         update_fields["admission_notes"] = data.notes
+    if data.assigned_doctor_id:
+        update_fields["assigned_doctor_id"] = data.assigned_doctor_id
+        update_fields["assigned_doctor_name"] = await _get_user_name(db, data.assigned_doctor_id)
 
     result = await db.visits.find_one_and_update(
         {"_id": visit_obj_id},
@@ -373,11 +396,12 @@ async def admit_patient(visit_id: str, data: AdmitPatient, user_id: str, db: Asy
     if not result:
         return None
     result["id"] = str(result["_id"])
+    result = await _enrich_visit_doc(result, db)
     return VisitInDB(**result)
 
 
+# Discharge patient and release bed to cleaning status.
 async def discharge_patient(visit_id: str, user_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
-    """Discharge patient and release bed to cleaning status."""
     try:
         obj_id = ObjectId(visit_id)
     except Exception:
@@ -387,9 +411,15 @@ async def discharge_patient(visit_id: str, user_id: str, db: AsyncDatabase) -> O
     if not visit_doc:
         return None
 
+    unpaid = await db.bills.find_one({
+        "visit_id": visit_id,
+        "status": {"$in": ["open", "partially_paid"]},
+    })
+    if unpaid:
+        raise ValueError("Cannot discharge: the patient has an outstanding bill. Settle billing first.")
+
     now = datetime.now(timezone.utc)
 
-    # Release bed if assigned
     bed_id = visit_doc.get("bed_id")
     if bed_id:
         try:
@@ -404,7 +434,7 @@ async def discharge_patient(visit_id: str, user_id: str, db: AsyncDatabase) -> O
                 }}
             )
         except Exception:
-            pass  # Don't block discharge if bed release fails
+            pass
 
     result = await db.visits.find_one_and_update(
         {"_id": obj_id},
@@ -421,29 +451,22 @@ async def discharge_patient(visit_id: str, user_id: str, db: AsyncDatabase) -> O
     return VisitInDB(**result)
 
 
+# Return per-stage TAT breakdown for a visit (in minutes).
 async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
-    """Return per-stage TAT breakdown for a visit (in minutes).
-
-    Stages:
-      1. Registration        registered_at → triaged_at
-      2. Triage              triaged_at → consultation_started_at
-      3. Doctor Consultation consultation_started_at → consultation_ended_at
-      4. Prescription Audit  rx.submitted_at → rx.verified_at   (PAS core)
-      5. Pharmacy Dispensing rx.verified_at → rx.dispensed_at
-      6. Administration      rx.dispensed_at → rx.administered_at
-      7. Billing             billing_completed_at → discharged_at
-    """
+    # Strip timezone info from a datetime for subtraction.
     def _naive(dt) -> Optional[datetime]:
         if dt is None:
             return None
         return dt.replace(tzinfo=None) if dt.tzinfo else dt
 
+    # Minutes between two times, or None if either is missing.
     def diff_min(a, b) -> Optional[float]:
         a, b = _naive(a), _naive(b)
         if a and b:
             return round((b - a).total_seconds() / 60, 1)
         return None
 
+    # Earliest of the given times, ignoring None.
     def earliest(values):
         vals = [_naive(v) for v in values if v is not None]
         return min(vals) if vals else None
@@ -451,34 +474,21 @@ async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
     now = datetime.utcnow()
     end = _naive(visit.discharged_at) or now
 
-    # Pull prescription timestamps for this visit
     rx_submitted_at   = None
     rx_verified_at    = None
     rx_dispensed_at   = None
     rx_administered_at = None
 
-    if visit.prescription_ids:
-        from bson import ObjectId as _ObjId
-        valid_ids = []
-        for pid in visit.prescription_ids:
-            try:
-                valid_ids.append(_ObjId(pid))
-            except Exception:
-                pass
+    rxs = await db.prescriptions.find(
+        {"visit_id": str(visit.id)},
+        {"submitted_at": 1, "verified_at": 1, "dispensed_at": 1, "administered_at": 1},
+    ).to_list(length=None)
+    if rxs:
+        rx_submitted_at    = earliest(r.get("submitted_at")    for r in rxs)
+        rx_verified_at     = earliest(r.get("verified_at")     for r in rxs)
+        rx_dispensed_at    = earliest(r.get("dispensed_at")    for r in rxs)
+        rx_administered_at = earliest(r.get("administered_at") for r in rxs)
 
-        if valid_ids:
-            cursor = db.prescriptions.find(
-                {"_id": {"$in": valid_ids}},
-                {"submitted_at": 1, "verified_at": 1, "dispensed_at": 1, "administered_at": 1},
-            )
-            rxs = await cursor.to_list(length=None)
-            rx_submitted_at    = earliest(r.get("submitted_at")    for r in rxs)
-            rx_verified_at     = earliest(r.get("verified_at")     for r in rxs)
-            rx_dispensed_at    = earliest(r.get("dispensed_at")    for r in rxs)
-            rx_administered_at = earliest(r.get("administered_at") for r in rxs)
-
-    # Prescription audit can only begin after the doctor ends the consultation.
-    # If consultation has not ended yet, the audit stage must remain Pending.
     consultation_ended = _naive(visit.consultation_ended_at)
     if consultation_ended is None:
         audit_start = None
@@ -491,9 +501,9 @@ async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
             "name": "Registration",
             "role": "receptionist",
             "started_at": visit.registered_at,
-            "completed_at": visit.triaged_at,
+            "completed_at": visit.doctor_assigned_at or visit.triaged_at,
             "target_min": 10,
-            "tat_min": diff_min(visit.registered_at, visit.triaged_at),
+            "tat_min": diff_min(visit.registered_at, visit.doctor_assigned_at or visit.triaged_at),
         },
         {
             "stage": 2,
@@ -565,10 +575,10 @@ async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
     }
 
 
+# Store (upsert) a consultation note on the visit document and update clinical fields.
 async def add_consultation_note(
     visit_id: str, data: ConsultationNoteCreate, doctor_id: str, db: AsyncDatabase
 ) -> Optional[ConsultationNote]:
-    """Store (upsert) a consultation note on the visit document and update clinical fields."""
     try:
         obj_id = ObjectId(visit_id)
     except Exception:
@@ -603,14 +613,12 @@ async def add_consultation_note(
         "updated_at": now,
     }
 
-    # Upsert into consultation_notes collection (one per visit)
     await db.consultation_notes.update_one(
         {"visit_id": visit_id},
         {"$set": note},
         upsert=True,
     )
 
-    # Also update the visit document with clinical fields for quick access
     visit_update: dict = {
         "consultation_room": data.consultation_room,
         "consultation_nurse_id": data.assisting_nurse_id,
@@ -633,8 +641,8 @@ async def add_consultation_note(
     return ConsultationNote(**{k: v for k, v in (note_doc or note).items() if k != "_id"}) if note_doc else ConsultationNote(**note)
 
 
+# Retrieve the consultation note for a visit.
 async def get_consultation_note(visit_id: str, db: AsyncDatabase) -> Optional[ConsultationNote]:
-    """Retrieve the consultation note for a visit."""
     doc = await db.consultation_notes.find_one({"visit_id": visit_id})
     if not doc:
         return None
@@ -642,6 +650,7 @@ async def get_consultation_note(visit_id: str, db: AsyncDatabase) -> Optional[Co
     return ConsultationNote(**{k: v for k, v in doc.items() if k != "_id"})
 
 
+# Link a prescription onto a visit.
 async def add_prescription_to_visit(visit_id: str, prescription_id: str, db: AsyncDatabase) -> bool:
     try:
         obj_id = ObjectId(visit_id)

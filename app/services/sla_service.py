@@ -3,7 +3,6 @@ from typing import List, Dict, Any, Optional
 from bson import ObjectId
 from pymongo.asynchronous.database import AsyncDatabase
 
-
 _PRIORITY_ORDER = ["stat", "nicu", "urgent", "discharge", "routine", "chemo"]
 
 _DEFAULT_THRESHOLDS = {
@@ -15,9 +14,8 @@ _DEFAULT_THRESHOLDS = {
     "chemo": 120,
 }
 
-
+# Return SLA thresholds for all priorities.
 async def get_sla_config(db: AsyncDatabase) -> List[Dict[str, Any]]:
-    """Return SLA thresholds for all priorities."""
     results = []
     for priority in _PRIORITY_ORDER:
         doc = await db.sla_config.find_one({"priority": priority})
@@ -38,14 +36,13 @@ async def get_sla_config(db: AsyncDatabase) -> List[Dict[str, Any]]:
             })
     return results
 
-
+# Update the SLA threshold for a given priority.
 async def update_sla_config(
     db: AsyncDatabase,
     priority: str,
     threshold_min: float,
     updated_by: str,
 ) -> Dict[str, Any]:
-    """Update the SLA threshold for a given priority."""
     if priority not in _DEFAULT_THRESHOLDS:
         raise ValueError(f"Unknown priority: {priority}. Valid priorities: {list(_DEFAULT_THRESHOLDS.keys())}")
 
@@ -74,8 +71,8 @@ async def update_sla_config(
     }
 
 
+# Return all currently active SLA breaches.
 async def get_live_breaches(db: AsyncDatabase) -> List[Dict[str, Any]]:
-    """Return all currently active SLA breaches."""
     now = datetime.now(timezone.utc)
 
     cursor = db.prescriptions.find({
@@ -111,6 +108,7 @@ async def get_live_breaches(db: AsyncDatabase) -> List[Dict[str, Any]]:
     return breaches
 
 
+# Count prescriptions currently breaching their SLA.
 async def get_breach_count(db: AsyncDatabase) -> int:
     return await db.prescriptions.count_documents({
         "status": {"$in": ["submitted", "flagged"]},

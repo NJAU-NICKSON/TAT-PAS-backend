@@ -16,6 +16,7 @@ from app.services import bed_service, department_service
 router = APIRouter(prefix="/beds", tags=["beds"])
 
 
+# List beds, optionally filtered.
 @router.get("", response_model=List[BedResponse])
 async def list_beds(
     department_id: Optional[str] = Query(None),
@@ -35,6 +36,7 @@ async def list_beds(
     return beds
 
 
+# Per-department bed availability counts.
 @router.get("/availability-summary", response_model=List[BedAvailabilitySummary])
 async def get_bed_availability_summary(
     db: AsyncDatabase = Depends(get_database),
@@ -44,6 +46,7 @@ async def get_bed_availability_summary(
     return summary
 
 
+# List free beds, optionally by type.
 @router.get("/available", response_model=List[BedResponse])
 async def get_available_beds(
     bed_type: str = Query(...),
@@ -55,6 +58,7 @@ async def get_available_beds(
     return beds
 
 
+# List beds in a department.
 @router.get("/department/{department_id}", response_model=List[BedWithPatient])
 async def get_beds_by_department(
     department_id: str,
@@ -71,6 +75,7 @@ async def get_beds_by_department(
     return beds
 
 
+# Fetch one bed by ID.
 @router.get("/{bed_id}", response_model=BedResponse)
 async def get_bed(
     bed_id: str,
@@ -86,6 +91,7 @@ async def get_bed(
     return bed
 
 
+# Add a new bed.
 @router.post("", response_model=BedResponse, status_code=status.HTTP_201_CREATED)
 async def create_bed(
     data: BedCreate,
@@ -110,6 +116,7 @@ async def create_bed(
     return bed
 
 
+# Update a bed.
 @router.patch("/{bed_id}", response_model=BedResponse)
 async def update_bed(
     bed_id: str,
@@ -126,6 +133,7 @@ async def update_bed(
     return bed
 
 
+# Place a patient in a bed.
 @router.post("/{bed_id}/assign", response_model=BedResponse)
 async def assign_patient_to_bed(
     bed_id: str,
@@ -143,6 +151,7 @@ async def assign_patient_to_bed(
     return bed
 
 
+# Free a bed to cleaning.
 @router.post("/{bed_id}/release", response_model=BedResponse)
 async def release_bed(
     bed_id: str,
@@ -158,6 +167,7 @@ async def release_bed(
     return bed
 
 
+# Mark a cleaned bed available.
 @router.post("/{bed_id}/cleaned", response_model=BedResponse)
 async def mark_bed_cleaned(
     bed_id: str,

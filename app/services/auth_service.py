@@ -6,6 +6,7 @@ from app.security.passwords import verify_password
 from app.security.jwt import create_access_token, create_refresh_token
 
 
+# Verify a username/password and return the user if valid.
 async def authenticate_user(
     username: str, password: str, db: AsyncDatabase
 ) -> Optional[UserInDB]:
@@ -14,10 +15,13 @@ async def authenticate_user(
         return None
     if not verify_password(password, user_doc["password_hash"]):
         return None
+    if user_doc.get("is_active", True) is False:
+        return None
     user_doc["_id"] = str(user_doc["_id"])
     return UserInDB(**user_doc)
 
 
+# Check a password against a specific user record.
 async def verify_password_for_user(
     user_id: str, password: str, db: AsyncDatabase
 ) -> bool:
@@ -33,6 +37,7 @@ async def verify_password_for_user(
     return verify_password(password, user_doc["password_hash"])
 
 
+# Issue access and refresh tokens for a user.
 def create_tokens(user: UserInDB) -> TokenResponse:
     token_data = {"sub": user.id, "role": user.role, "department_id": user.department_id}
     access_token = create_access_token(token_data)

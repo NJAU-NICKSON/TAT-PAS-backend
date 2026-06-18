@@ -15,6 +15,7 @@ from app.services import department_service
 router = APIRouter(prefix="/departments", tags=["departments"])
 
 
+# List departments.
 @router.get("", response_model=List[DepartmentResponse])
 async def list_departments(
     is_active: Optional[bool] = Query(None),
@@ -29,6 +30,7 @@ async def list_departments(
     return departments
 
 
+# List departments that accept emergencies.
 @router.get("/emergency", response_model=List[DepartmentResponse])
 async def list_emergency_departments(
     db: AsyncDatabase = Depends(get_database),
@@ -38,6 +40,7 @@ async def list_emergency_departments(
     return departments
 
 
+# Fetch one department by ID.
 @router.get("/{department_id}", response_model=DepartmentWithBedSummary)
 async def get_department(
     department_id: str,
@@ -53,6 +56,7 @@ async def get_department(
     return department
 
 
+# Add a department.
 @router.post("", response_model=DepartmentResponse, status_code=status.HTTP_201_CREATED)
 async def create_department(
     data: DepartmentCreate,
@@ -69,6 +73,7 @@ async def create_department(
     return department
 
 
+# Update a department.
 @router.patch("/{department_id}", response_model=DepartmentResponse)
 async def update_department(
     department_id: str,
@@ -85,6 +90,7 @@ async def update_department(
     return department
 
 
+# Remove a department.
 @router.delete("/{department_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_department(
     department_id: str,

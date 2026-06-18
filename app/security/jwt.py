@@ -4,6 +4,7 @@ from fastapi import HTTPException, status
 from app.config import get_settings
 
 
+# Build a short-lived JWT access token for a user.
 def create_access_token(data: dict) -> str:
     settings = get_settings()
     payload = data.copy()
@@ -14,6 +15,7 @@ def create_access_token(data: dict) -> str:
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
+# Build a long-lived JWT refresh token for a user.
 def create_refresh_token(data: dict) -> str:
     settings = get_settings()
     payload = data.copy()
@@ -24,6 +26,7 @@ def create_refresh_token(data: dict) -> str:
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
+# Decode and validate a JWT, returning its claims.
 def decode_token(token: str) -> dict:
     settings = get_settings()
     try:

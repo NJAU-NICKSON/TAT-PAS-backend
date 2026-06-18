@@ -32,20 +32,18 @@ _NURSE_VISIBLE = ["dispensed", "administered"]
 nursing_role_values = [r.value for r in NURSING_ROLES]
 
 
+# Active pharmacy queue: submitted and flagged prescriptions sorted by
 @router.get("/queue", response_model=list[PrescriptionInDB])
 async def prescription_queue(
     skip: int = Query(0, ge=0),
-    limit: int = Query(50, ge=1, le=100),
+    limit: int = Query(50, ge=1, le=500),
     current_user=Depends(require_roles(Roles.pharmacist, Roles.admin, Roles.auditor)),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """
-    Active pharmacy queue: submitted and flagged prescriptions sorted by
-    priority (stat first) then age (oldest first).
-    """
     return await get_prescription_queue(db, skip=skip, limit=limit)
 
 
+# Create a prescription and run safety checks.
 @router.post("/", response_model=PrescriptionInDB, status_code=status.HTTP_201_CREATED)
 async def create_prescription_endpoint(
     request: Request,
@@ -58,10 +56,8 @@ async def create_prescription_endpoint(
     ip = request.client.host if request.client else None
     ua = request.headers.get("user-agent")
 
-    # Run simple inline checks (always available)
     checks = run_automated_checks({"medications": [m.model_dump() for m in body.medications]})
 
-    # Run comprehensive flagging rules if patient data is available
     if body.patient_id:
         from bson import ObjectId
         patient_doc = await db.patients.find_one({"_id": ObjectId(body.patient_id)}) if ObjectId.is_valid(body.patient_id) else None
@@ -74,7 +70,6 @@ async def create_prescription_endpoint(
             active_rxs = await active_rxs_cursor.to_list(length=50)
             rx_dict = {"medications": [m.model_dump() for m in body.medications]}
             advanced_flags = await flagging_service.check_all_rules(rx_dict, patient_doc, active_rxs, db)
-            # Merge advanced flags, avoiding duplicates by flag_code
             existing_codes = {c.get("flag_code") for c in checks}
             for flag in advanced_flags:
                 if flag.code not in existing_codes:
@@ -108,6 +103,7 @@ async def create_prescription_endpoint(
     return prescription
 
 
+# List prescriptions with filters.
 @router.get("/", response_model=list[PrescriptionInDB])
 async def list_prescriptions(
     status_filter: Optional[str] = Query(None, alias="status"),
@@ -115,7 +111,7 @@ async def list_prescriptions(
     date_from: Optional[datetime] = Query(None),
     date_to: Optional[datetime] = Query(None),
     skip: int = Query(0, ge=0),
-    limit: int = Query(20, ge=1, le=100),
+    limit: int = Query(20, ge=1, le=500),
     current_user=Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database),
 ):
@@ -157,16 +153,17 @@ async def list_prescriptions(
     return [_doc_to_prescription(doc) for doc in docs]
 
 
+# Full chronological audit trail for a prescription.
 @router.get("/{prescription_id}/history")
 async def get_history(
     prescription_id: str,
     current_user=Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """Full chronological audit trail for a prescription."""
     return await get_prescription_history(db, prescription_id)
 
 
+# Fetch one prescription by ID.
 @router.get("/{prescription_id}", response_model=PrescriptionInDB)
 async def get_prescription(
     prescription_id: str,
@@ -186,6 +183,7 @@ async def get_prescription(
     return prescription
 
 
+# Dedicated status-change endpoint used by auditors, pharmacists, and nurses.
 @router.patch("/{prescription_id}/status", response_model=PrescriptionInDB)
 async def update_prescription_status(
     request: Request,
@@ -194,7 +192,6 @@ async def update_prescription_status(
     current_user=Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """Dedicated status-change endpoint used by auditors, pharmacists, and nurses."""
     permitted_roles = [
         Roles.doctor.value,
         Roles.pharmacist.value,
@@ -230,6 +227,7 @@ async def update_prescription_status(
     return updated
 
 
+# Change a prescription's status.
 @router.patch("/{prescription_id}", response_model=PrescriptionInDB)
 async def update_prescription(
     request: Request,
@@ -292,12 +290,13 @@ async def update_prescription(
     return updated
 
 
+# Raise a simple flag on a prescription.
 @router.post("/{prescription_id}/flag", response_model=PrescriptionInDB)
 async def flag_prescription(
     request: Request,
     prescription_id: str,
     flag: str = Body(..., embed=True),
-    current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
+    current_user=Depends(require_roles(Roles.pharmacist, Roles.auditor, Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
 ):
     updated = await add_flag(
@@ -319,6 +318,7 @@ async def flag_prescription(
     return updated
 
 
+# Raise a detailed flag on a prescription.
 @router.post("/{prescription_id}/flags", response_model=PrescriptionInDB)
 async def flag_prescription_detailed(
     request: Request,
@@ -327,7 +327,7 @@ async def flag_prescription_detailed(
     severity: str = Body(...),
     recommendation: str = Body(...),
     flag_code: str = Body("manual_flag"),
-    current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
+    current_user=Depends(require_roles(Roles.pharmacist, Roles.auditor, Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
 ):
     ip = request.client.host if request.client else None

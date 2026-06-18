@@ -17,25 +17,26 @@ from app.services.analytics_service import (
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
+# TAT metrics for prescriptions ordered today.
 @router.get("/tat/live")
 async def tat_live(
     current_user=Depends(require_roles(Roles.admin, Roles.auditor)),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """TAT metrics for prescriptions ordered today."""
     return await get_live_tat(db)
 
 
+# Daily TAT averages from stored daily reports for the past N days.
 @router.get("/tat/history")
 async def tat_history(
     days: int = Query(30, ge=1, le=365),
     current_user=Depends(require_roles(Roles.admin, Roles.auditor)),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """Daily TAT averages from stored daily reports for the past N days."""
     return await get_tat_history(db, days=days)
 
 
+# Turnaround-time metrics over a date range.
 @router.get("/tat")
 async def tat_metrics(
     date_from: Optional[datetime] = Query(None),
@@ -75,6 +76,7 @@ async def tat_metrics(
 
     return metrics
 
+# CSV export - delegates to /tat?format=csv.
 @router.get("/export")
 async def export_analytics(
     date_from: Optional[datetime] = Query(None),
@@ -82,7 +84,6 @@ async def export_analytics(
     current_user=Depends(require_roles(Roles.admin, Roles.auditor)),
     db: AsyncDatabase = Depends(get_database),
 ):
-    """CSV export — delegates to /tat?format=csv."""
     return await tat_metrics(
         date_from=date_from,
         date_to=date_to,
@@ -91,6 +92,7 @@ async def export_analytics(
         db=db,
     )
 
+# The slowest stage in the prescription pipeline.
 @router.get("/bottlenecks")
 async def bottleneck_analysis(
     date_from: Optional[datetime] = Query(None),
@@ -100,6 +102,7 @@ async def bottleneck_analysis(
 ):
     return await get_bottleneck_analysis(db, start_date=date_from, end_date=date_to)
 
+# Per-staff performance figures.
 @router.get("/performance")
 async def performance_stats(
     role: str = Query(..., description="doctor or pharmacist"),

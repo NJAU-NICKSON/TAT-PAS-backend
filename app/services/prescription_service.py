@@ -16,7 +16,6 @@ from app.services import audit_service
 from app.ws.manager import manager
 
 
-# SLA thresholds by priority in minutes. These are fallbacks if sla_config is missing.
 _DEFAULT_SLA_THRESHOLDS: Dict[str, float] = {
     "stat": 15.0,
     "urgent": 30.0,
@@ -26,10 +25,73 @@ _DEFAULT_SLA_THRESHOLDS: Dict[str, float] = {
     "chemo": 120.0,
 }
 
-# Warning threshold as a fraction of total SLA window
 _SLA_WARNING_FRACTION = 0.75
 
 
+# Coerce a datetime to timezone-aware UTC.
+def _ensure_aware(value: Optional[datetime]) -> Optional[datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+# Stringify an id reference, passing through None.
+def _normalize_ref(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    return str(value) if not isinstance(value, str) else value
+
+
+# Reject prescribing until triage and consultation are done.
+async def _ensure_visit_ready_for_prescription(
+    db: AsyncDatabase,
+    prescription: PrescriptionCreate,
+) -> None:
+    if not prescription.visit_id:
+        return
+    if not ObjectId.is_valid(prescription.visit_id):
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Select a valid visit before creating a prescription.",
+        )
+
+    visit_doc = await db.visits.find_one(
+        {"_id": ObjectId(prescription.visit_id)},
+        {
+            "patient_id": 1,
+            "triaged_at": 1,
+            "consultation_started_at": 1,
+        },
+    )
+    if not visit_doc:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail="The selected visit could not be found.",
+        )
+
+    visit_patient_id = _normalize_ref(visit_doc.get("patient_id"))
+    if visit_patient_id and visit_patient_id != prescription.patient_id:
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The selected visit does not belong to the selected patient.",
+        )
+
+    if not visit_doc.get("triaged_at"):
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Complete triage before creating a prescription for this visit.",
+        )
+
+    if not visit_doc.get("consultation_started_at"):
+        raise HTTPException(
+            status_code=http_status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Start the consultation before creating a prescription for this visit.",
+        )
+
+
+# Convert a prescription document to a model.
 def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
     medications = []
     for m in doc.get("medications", []):
@@ -38,10 +100,9 @@ def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
         else:
             medications.append(m)
 
+    # Stringify an ObjectId, passing through None.
     def _str(val) -> Optional[str]:
-        if val is None:
-            return None
-        return str(val) if not isinstance(val, str) else val
+        return _normalize_ref(val)
 
     priority_val = doc.get("priority")
     if priority_val is None:
@@ -117,8 +178,8 @@ def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
     )
 
 
+# Attach patient_name, doctor_name, and actor names to prescription docs in-place.
 async def _enrich_docs_with_names(db: AsyncDatabase, docs: List[dict]) -> List[dict]:
-    """Attach patient_name, doctor_name, and actor names to prescription docs in-place."""
     patient_ids = list({d["patient_id"] for d in docs if d.get("patient_id")})
     user_id_set: set = set()
     for d in docs:
@@ -133,7 +194,7 @@ async def _enrich_docs_with_names(db: AsyncDatabase, docs: List[dict]) -> List[d
             cursor = db.patients.find({"_id": {"$in": valid_pids}}, {"first_name": 1, "last_name": 1})
             async for pdoc in cursor:
                 name = f"{pdoc.get('first_name', '')} {pdoc.get('last_name', '')}".strip()
-                patient_map[str(pdoc["_id"])] = name or str(pdoc["_id"])
+                patient_map[str(pdoc["_id"])] = name or ""
 
     user_map: Dict[str, str] = {}
     if user_id_set:
@@ -141,7 +202,7 @@ async def _enrich_docs_with_names(db: AsyncDatabase, docs: List[dict]) -> List[d
         if valid_uids:
             cursor = db.users.find({"_id": {"$in": valid_uids}}, {"full_name": 1, "username": 1})
             async for udoc in cursor:
-                user_map[str(udoc["_id"])] = udoc.get("full_name") or udoc.get("username") or str(udoc["_id"])
+                user_map[str(udoc["_id"])] = udoc.get("full_name") or udoc.get("username") or ""
 
     for doc in docs:
         doc["patient_name"] = patient_map.get(str(doc.get("patient_id")), "")
@@ -156,24 +217,54 @@ async def _enrich_docs_with_names(db: AsyncDatabase, docs: List[dict]) -> List[d
     return docs
 
 
+# Look up the SLA threshold for a given priority from the config collection.
 async def _get_sla_threshold(db: AsyncDatabase, priority: str) -> float:
-    """Look up the SLA threshold for a given priority from the config collection."""
     doc = await db.sla_config.find_one({"priority": priority})
     if doc and doc.get("threshold_min") is not None:
         return float(doc["threshold_min"])
     return _DEFAULT_SLA_THRESHOLDS.get(priority, 60.0)
 
 
+# Generate a unique, human-readable prescription number (e.g. RX-2026-0042).
+async def generate_rx_number(db: AsyncDatabase) -> str:
+    year = datetime.now(timezone.utc).strftime("%Y")
+    counter_id = f"rx_{year}"
+
+    result = await db.counters.find_one_and_update(
+        {"_id": counter_id},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    seq = result.get("seq", 1)
+
+    prefix = f"RX-{year}-"
+    if await db.prescriptions.find_one({"rx_number": f"{prefix}{seq:04d}"}, {"_id": 1}):
+        count = await db.prescriptions.count_documents({"rx_number": {"$regex": f"^{prefix}"}})
+        seq = count + 1
+        await db.counters.update_one(
+            {"_id": counter_id},
+            {"$set": {"seq": seq}},
+            upsert=True,
+        )
+
+    return f"{prefix}{seq:04d}"
+
+
+# Create a prescription and link it to its visit.
 async def create_prescription(
     db: AsyncDatabase,
     prescription: PrescriptionCreate,
     doctor_id: str,
 ) -> PrescriptionInDB:
     now = datetime.now(timezone.utc)
+    await _ensure_visit_ready_for_prescription(db, prescription)
     priority_str = prescription.priority.value if hasattr(prescription.priority, "value") else str(prescription.priority)
     sla_threshold = await _get_sla_threshold(db, priority_str)
+    rx_number = await generate_rx_number(db)
 
     doc = {
+        "rx_number": rx_number,
         "patient_id": prescription.patient_id,
         "doctor_id": doctor_id,
         "medications": [m.model_dump() for m in prescription.medications],
@@ -202,6 +293,12 @@ async def create_prescription(
     result = await db.prescriptions.insert_one(doc)
     doc["_id"] = result.inserted_id
 
+    if prescription.visit_id and ObjectId.is_valid(prescription.visit_id):
+        await db.visits.update_one(
+            {"_id": ObjectId(prescription.visit_id)},
+            {"$addToSet": {"prescription_ids": str(result.inserted_id)}},
+        )
+
     event = {
         "event_type": "prescription.created",
         "entity_id": str(result.inserted_id),
@@ -220,6 +317,7 @@ async def create_prescription(
     return _doc_to_prescription(doc)
 
 
+# List prescriptions with filters, names attached.
 async def get_prescriptions(
     db: AsyncDatabase,
     status: Optional[str] = None,
@@ -236,16 +334,15 @@ async def get_prescriptions(
     if doctor_id:
         query["doctor_id"] = doctor_id
 
-    # Sort: STAT first, then by submitted_at ascending (longest wait first)
     priority_order = ["stat", "nicu", "urgent", "discharge", "routine", "chemo"]
     cursor = db.prescriptions.find(query).sort([
         ("submitted_at", 1),
     ]).skip(skip).limit(limit)
     docs = await cursor.to_list(length=limit)
 
+    docs = await _enrich_docs_with_names(db, docs)
     results = [_doc_to_prescription(doc) for doc in docs]
 
-    # Re-sort in Python to apply priority ordering since MongoDB sort on array enum order is complex
     priority_rank = {p: i for i, p in enumerate(priority_order)}
     results.sort(key=lambda p: (
         priority_rank.get(p.priority.value if hasattr(p.priority, "value") else str(p.priority), 99),
@@ -255,12 +352,12 @@ async def get_prescriptions(
     return results
 
 
+# Return active queue: submitted and flagged, sorted by priority then age.
 async def get_prescription_queue(
     db: AsyncDatabase,
     skip: int = 0,
     limit: int = 50,
 ) -> List[PrescriptionInDB]:
-    """Return active queue: submitted and flagged, sorted by priority then age."""
     query = {"status": {"$in": ["submitted", "flagged"]}}
     docs_cursor = db.prescriptions.find(query).skip(skip).limit(limit)
     docs = await docs_cursor.to_list(length=limit)
@@ -275,6 +372,7 @@ async def get_prescription_queue(
     return results
 
 
+# Fetch one prescription by ID.
 async def get_prescription_by_id(
     db: AsyncDatabase, prescription_id: str
 ) -> Optional[PrescriptionInDB]:
@@ -289,10 +387,10 @@ async def get_prescription_by_id(
     return _doc_to_prescription(docs[0])
 
 
+# Return all audit records for a prescription, sorted oldest first.
 async def get_prescription_history(
     db: AsyncDatabase, prescription_id: str
 ) -> List[dict]:
-    """Return all audit records for a prescription, sorted oldest first."""
     cursor = db.audit_records.find(
         {"prescription_id": prescription_id}
     ).sort("created_at", 1)
@@ -317,17 +415,18 @@ async def get_prescription_history(
 PERMITTED_TRANSITIONS = {
     "draft": {"submitted": ["doctor", "surgeon", "anaesthetist", "midwife"]},
     "submitted": {
-        "verified": ["auditor", "admin"],
-        "pending_amendment": ["auditor", "admin"],
+        "verified": ["pharmacist", "auditor", "admin"],
+        "pending_amendment": ["pharmacist", "auditor", "admin"],
         "flagged": ["pharmacist", "auditor", "admin"],
     },
     "pending_amendment": {"submitted": ["doctor", "surgeon", "anaesthetist", "midwife", "admin"]},
-    "flagged": {"verified": ["auditor", "admin"]},
+    "flagged": {"verified": ["pharmacist", "auditor", "admin"]},
     "verified": {"dispensed": ["pharmacist", "admin"]},
     "dispensed": {"administered": ["nurse", "admin"]},
 }
 
 
+# Move a prescription to its next state and record TAT.
 async def advance_status(
     db: AsyncDatabase,
     prescription_id: str,
@@ -411,7 +510,6 @@ async def advance_status(
                 },
             )
 
-    # Block verification if unresolved clinical flags exist (skip for auditor overrides)
     if new_status == "verified" and role not in ("admin",):
         unresolved_count = await db.audit_records.count_documents({
             "prescription_id": prescription_id,
@@ -428,10 +526,9 @@ async def advance_status(
                 },
             )
 
-    # Compute TAT fields per transition
     if new_status == "submitted":
         set_fields["submitted_at"] = now
-        ordered_at = old_doc.get("ordered_at")
+        ordered_at = _ensure_aware(old_doc.get("ordered_at"))
         if ordered_at:
             set_fields["tat_order_to_submit_min"] = (now - ordered_at).total_seconds() / 60
 
@@ -442,11 +539,10 @@ async def advance_status(
     elif new_status == "verified":
         set_fields["verified_at"] = now
         set_fields["auditor_id"] = user_id
-        submitted_at = old_doc.get("submitted_at")
+        submitted_at = _ensure_aware(old_doc.get("submitted_at"))
         if submitted_at:
             set_fields["tat_submit_to_verify_min"] = (now - submitted_at).total_seconds() / 60
 
-        # Compute total flag hold time from all resolved flags
         resolved_cursor = db.audit_records.find({
             "prescription_id": prescription_id,
             "type": "resolution",
@@ -462,15 +558,17 @@ async def advance_status(
                 except Exception:
                     orig = None
                 if orig and audit.get("resolved_at") and orig.get("created_at"):
-                    flag_hold = (audit["resolved_at"] - orig["created_at"]).total_seconds() / 60
+                    resolved_at = _ensure_aware(audit["resolved_at"])
+                    flag_created_at = _ensure_aware(orig["created_at"])
+                    flag_hold = (resolved_at - flag_created_at).total_seconds() / 60
                     tat_flag_hold_min += flag_hold
         set_fields["tat_flag_hold_min"] = tat_flag_hold_min
 
     elif new_status == "dispensed":
         set_fields["dispensed_at"] = now
         set_fields["dispensed_by_id"] = user_id
-        verified_at = old_doc.get("verified_at")
-        submitted_at = old_doc.get("submitted_at")
+        verified_at = _ensure_aware(old_doc.get("verified_at"))
+        submitted_at = _ensure_aware(old_doc.get("submitted_at"))
 
         if verified_at:
             set_fields["tat_verify_to_dispense_min"] = (now - verified_at).total_seconds() / 60
@@ -527,8 +625,8 @@ async def advance_status(
     elif new_status == "administered":
         set_fields["administered_at"] = now
         set_fields["administered_by_id"] = user_id
-        dispensed_at = old_doc.get("dispensed_at")
-        ordered_at = old_doc.get("ordered_at")
+        dispensed_at = _ensure_aware(old_doc.get("dispensed_at"))
+        ordered_at = _ensure_aware(old_doc.get("ordered_at"))
 
         if dispensed_at:
             set_fields["tat_dispense_to_admin_min"] = (now - dispensed_at).total_seconds() / 60
@@ -618,6 +716,7 @@ async def advance_status(
     return _doc_to_prescription(result)
 
 
+# Attach a safety flag to a prescription.
 async def add_flag(
     db: AsyncDatabase,
     prescription_id: str,
@@ -660,6 +759,7 @@ async def add_flag(
     return _doc_to_prescription(result)
 
 
+# Run quick inline safety checks on the medications.
 def run_automated_checks(prescription: dict) -> List[dict]:
     issues: List[dict] = []
     medications = prescription.get("medications", [])
@@ -677,8 +777,6 @@ def run_automated_checks(prescription: dict) -> List[dict]:
         for num_str in numbers:
             val = float(num_str)
             unit_lower = dose_str.lower()
-            # Only flag numeric doses above 2000 mg, or above 500 for mcg/microgram
-            # to reduce false positives on normal clinical doses
             is_high = (
                 (val > 2000 and ("mg" in unit_lower or not any(u in unit_lower for u in ["mcg", "microgram", "unit", "iu"])))
                 or (val > 500 and any(u in unit_lower for u in ["mcg", "microgram"]))

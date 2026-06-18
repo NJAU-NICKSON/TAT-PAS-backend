@@ -8,21 +8,30 @@ from app.services.user_service import (
     get_user_by_id,
     get_users,
     update_user,
+    set_user_active,
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
 
 
+# List users. Admins see everyone; other staff may list clinical staff
 @router.get("/", response_model=list[UserResponse])
 async def list_users(
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
-    current_user=Depends(require_roles(Roles.admin)),
+    role: str | None = Query(None, description="Filter by role, e.g. 'doctor' or 'nurse'"),
+    current_user=Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database),
 ):
-    return await get_users(db, skip=skip, limit=limit)
+    if current_user.role != Roles.admin.value and role not in ("doctor", "nurse"):
+        raise HTTPException(
+            status_code=403,
+            detail="Only admins may list all users. Specify role=doctor or role=nurse.",
+        )
+    return await get_users(db, skip=skip, limit=limit, role=role)
 
 
+# Create a staff account.
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def create_new_user(
     body: UserCreate,
@@ -40,6 +49,7 @@ async def create_new_user(
     return await create_user(db, body)
 
 
+# Fetch one user by ID.
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(
     user_id: str,
@@ -68,6 +78,7 @@ async def get_user(
         last_login=user.last_login,
     )
 
+# Update a user's details.
 @router.patch("/{user_id}", response_model=UserResponse)
 async def update_existing_user(
     user_id: str,
@@ -76,6 +87,43 @@ async def update_existing_user(
     db: AsyncDatabase = Depends(get_database),
 ):
     updated = await update_user(db, user_id, body)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    return updated
+
+
+# Deactivate (soft-delete) a user. Blocks login but preserves the record
+@router.delete("/{user_id}", response_model=UserResponse)
+async def deactivate_user(
+    user_id: str,
+    current_user=Depends(require_roles(Roles.admin)),
+    db: AsyncDatabase = Depends(get_database),
+):
+    if current_user.id == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="You cannot deactivate your own account.",
+        )
+    updated = await set_user_active(db, user_id, is_active=False)
+    if not updated:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    return updated
+
+
+# Restore a previously deactivated user.
+@router.post("/{user_id}/reactivate", response_model=UserResponse)
+async def reactivate_user(
+    user_id: str,
+    current_user=Depends(require_roles(Roles.admin)),
+    db: AsyncDatabase = Depends(get_database),
+):
+    updated = await set_user_active(db, user_id, is_active=True)
     if not updated:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

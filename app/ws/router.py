@@ -11,37 +11,34 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-PING_INTERVAL = 25  # seconds between server-side pings
+PING_INTERVAL = 25  
 
 
+# WebSocket endpoint with first-message token authentication.
 @router.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
-    """
-    WebSocket endpoint with first-message token authentication.
-
-    Protocol:
-    1. Server accepts the connection.
-    2. Client sends: {"type": "auth", "token": "<access_jwt>"}
-    3. Server replies: {"type": "auth_ok", "room": "<room>"}
-       or closes with 1008 Policy Violation on auth failure.
-    4. Server sends periodic {"type": "ping"} frames; client may respond
-       with {"type": "pong"} (ignored if not sent — TCP keepalive handles it).
-    """
     await websocket.accept()
 
-    # Step 1: read auth frame
+    # Close the socket, ignoring the case where the client already left.
+    async def _safe_close(code: int) -> None:
+        try:
+            await websocket.close(code=code)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+
     try:
         raw = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
         frame = json.loads(raw)
+    except WebSocketDisconnect:
+        return
     except (asyncio.TimeoutError, Exception):
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        await _safe_close(status.WS_1008_POLICY_VIOLATION)
         return
 
     if frame.get("type") != "auth" or not frame.get("token"):
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        await _safe_close(status.WS_1008_POLICY_VIOLATION)
         return
 
-    # Step 2: validate token and confirm user still exists in DB
     try:
         payload = decode_token(frame["token"])
         if payload.get("type") != "access":
@@ -57,10 +54,9 @@ async def websocket_endpoint(websocket: WebSocket):
         if not user_doc:
             raise ValueError("user not found")
     except Exception:
-        await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
+        await _safe_close(status.WS_1008_POLICY_VIOLATION)
         return
 
-    # Step 3: assign room
     if role == "pharmacist":
         room = "pharmacy"
     elif role == "auditor":
@@ -78,20 +74,18 @@ async def websocket_endpoint(websocket: WebSocket):
     else:
         room = "general"
 
-    # Register into the manager using the lock — avoids race conditions
     async with manager._lock:
         if room not in manager.active_connections:
             manager.active_connections[room] = []
         manager.active_connections[room].append(websocket)
 
-    # Step 4: confirm auth
     try:
         await websocket.send_text(json.dumps({"type": "auth_ok", "room": room}))
     except Exception:
         await manager.disconnect(websocket, room)
         return
 
-    # Step 5: message loop with periodic ping
+    # Send periodic pings to keep a WebSocket alive.
     async def _ping_loop():
         while True:
             await asyncio.sleep(PING_INTERVAL)
@@ -104,14 +98,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
     try:
         while True:
-            # Consume client frames (pong / ignored messages)
             data = await websocket.receive_text()
             try:
                 msg = json.loads(data)
                 if msg.get("type") == "pong":
-                    pass  # acknowledged
+                    pass  
             except Exception:
-                pass  # malformed frame — ignore
+                pass 
     except WebSocketDisconnect:
         pass
     except Exception:

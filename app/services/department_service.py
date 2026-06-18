@@ -11,11 +11,13 @@ from app.models.department import (
 )
 
 
+# Convert a department document to a model.
 def doc_to_department(doc: dict) -> DepartmentInDB:
     doc["id"] = str(doc["_id"])
     return DepartmentInDB(**doc)
 
 
+# List departments.
 async def get_all_departments(
     db: AsyncDatabase,
     is_active: Optional[bool] = None,
@@ -37,6 +39,7 @@ async def get_all_departments(
     return departments
 
 
+# Fetch a department by ID.
 async def get_department_by_id(
     db: AsyncDatabase, department_id: str
 ) -> Optional[DepartmentInDB]:
@@ -51,6 +54,7 @@ async def get_department_by_id(
     return doc_to_department(doc)
 
 
+# Fetch a department by its code (e.g. OPD).
 async def get_department_by_code(
     db: AsyncDatabase, code: str
 ) -> Optional[DepartmentInDB]:
@@ -60,6 +64,7 @@ async def get_department_by_code(
     return doc_to_department(doc)
 
 
+# Get a department plus its bed availability.
 async def get_department_with_bed_summary(
     db: AsyncDatabase, department_id: str
 ) -> Optional[DepartmentWithBedSummary]:
@@ -99,6 +104,7 @@ async def get_department_with_bed_summary(
     )
 
 
+# Add a new department.
 async def create_department(
     db: AsyncDatabase, data: DepartmentCreate
 ) -> DepartmentInDB:
@@ -112,6 +118,7 @@ async def create_department(
     return doc_to_department(doc)
 
 
+# Update a department's fields.
 async def update_department(
     db: AsyncDatabase, department_id: str, data: DepartmentUpdate
 ) -> Optional[DepartmentInDB]:
@@ -136,6 +143,7 @@ async def update_department(
     return doc_to_department(result)
 
 
+# Remove a department.
 async def delete_department(db: AsyncDatabase, department_id: str) -> bool:
     try:
         obj_id = ObjectId(department_id)
@@ -146,6 +154,7 @@ async def delete_department(db: AsyncDatabase, department_id: str) -> bool:
     return result.deleted_count > 0
 
 
+# List departments that take emergency cases.
 async def get_departments_accepting_emergency(
     db: AsyncDatabase,
 ) -> List[DepartmentInDB]:

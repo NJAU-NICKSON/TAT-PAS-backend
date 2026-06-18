@@ -4,6 +4,7 @@ from typing import Optional, List, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+# Types of visit (OPD, IPD, etc.).
 class VisitType(str, Enum):
     opd = "opd"
     ipd = "ipd"
@@ -14,6 +15,7 @@ class VisitType(str, Enum):
     nicu = "nicu"
 
 
+# Visit workflow states.
 class VisitStatus(str, Enum):
     registered = "registered"
     triaged = "triaged"
@@ -28,18 +30,20 @@ class VisitStatus(str, Enum):
     cancelled = "cancelled"
 
 
+# Triage vital-sign readings.
 class VitalSigns(BaseModel):
-    blood_pressure_systolic: Optional[int] = None   # mmHg
-    blood_pressure_diastolic: Optional[int] = None  # mmHg
+    blood_pressure_systolic: Optional[int] = None
+    blood_pressure_diastolic: Optional[int] = None
     temperature_celsius: Optional[float] = None
-    pulse_rate: Optional[int] = None                # bpm
-    oxygen_saturation: Optional[float] = None       # %
+    pulse_rate: Optional[int] = None
+    oxygen_saturation: Optional[float] = None
     weight_kg: Optional[float] = None
     height_cm: Optional[float] = None
-    respiratory_rate: Optional[int] = None          # breaths/min
+    respiratory_rate: Optional[int] = None
     triage_notes: Optional[str] = None
 
 
+# Shared visit fields.
 class VisitBase(BaseModel):
     patient_id: str
     visit_type: VisitType
@@ -48,21 +52,26 @@ class VisitBase(BaseModel):
     priority: Literal["routine", "urgent", "critical", "immediate"] = "routine"
 
 
+# Fields for registering a visit.
 class VisitCreate(VisitBase):
     pass
 
 
+# Triage submission payload.
 class TriageSubmit(BaseModel):
     vitals: VitalSigns
     assigned_doctor_id: Optional[str] = None
     consultation_room: Optional[str] = None
 
 
+# Admission request body.
 class AdmitPatient(BaseModel):
     bed_id: str
     notes: Optional[str] = None
+    assigned_doctor_id: Optional[str] = None
 
 
+# Fields for updating a visit.
 class VisitUpdate(BaseModel):
     status: Optional[VisitStatus] = None
     assigned_doctor_id: Optional[str] = None
@@ -78,6 +87,7 @@ class VisitUpdate(BaseModel):
     discharge_notes: Optional[str] = None
 
 
+# Consultation-note submission payload.
 class ConsultationNoteCreate(BaseModel):
     """Payload the client sends when creating/updating a consultation note."""
     consultation_room: Optional[str] = None
@@ -91,6 +101,7 @@ class ConsultationNoteCreate(BaseModel):
     follow_up_date: Optional[str] = None
 
 
+# A saved consultation note.
 class ConsultationNote(BaseModel):
     id: Optional[str] = None
     visit_id: Optional[str] = None
@@ -111,6 +122,7 @@ class ConsultationNote(BaseModel):
     updated_at: Optional[datetime] = None
 
 
+# Visit as stored in the database.
 class VisitInDB(VisitBase):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -132,13 +144,13 @@ class VisitInDB(VisitBase):
     admission_notes: Optional[str] = None
     prescription_ids: List[str] = []
     vitals: Optional[VitalSigns] = None
-    # Clinical data from consultation
     diagnosis: Optional[str] = None
     clinical_findings: Optional[str] = None
     recommendations: Optional[str] = None
     follow_up_instructions: Optional[str] = None
     discharge_notes: Optional[str] = None
     registered_at: datetime
+    doctor_assigned_at: Optional[datetime] = None
     triaged_at: Optional[datetime] = None
     consultation_started_at: Optional[datetime] = None
     consultation_ended_at: Optional[datetime] = None
@@ -149,5 +161,6 @@ class VisitInDB(VisitBase):
     updated_at: Optional[datetime] = None
 
 
+# Visit returned by the API.
 class VisitResponse(VisitInDB):
     patient_name: Optional[str] = None
