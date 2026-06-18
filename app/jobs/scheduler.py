@@ -76,8 +76,6 @@ async def start_scheduler():
     )
     
     scheduler.start()
-
-
 # Stop the background job scheduler.
 async def stop_scheduler():
     scheduler.shutdown()

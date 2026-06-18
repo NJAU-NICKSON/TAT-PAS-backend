@@ -249,7 +249,6 @@ async def create_security_audit(
         security_event_type=event_type,
     )
 
-
 # Attach rx_number and patient_name to audit docs in-place.
 async def _enrich_audit_docs(db: AsyncDatabase, docs: List[dict]) -> List[dict]:
     rx_ids = list({d["prescription_id"] for d in docs if d.get("prescription_id") and d["prescription_id"] != "system"})
