@@ -6,7 +6,6 @@ from app.jobs import sla_scanner
 
 scheduler = AsyncIOScheduler()
 
-
 # Start the background job scheduler.
 async def start_scheduler():
     db = await get_database()

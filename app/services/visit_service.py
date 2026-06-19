@@ -4,6 +4,7 @@ from bson import ObjectId
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError
 from app.models.visit import VisitCreate, VisitInDB, VisitUpdate, VisitStatus, VisitResponse, TriageSubmit, AdmitPatient, ConsultationNote, ConsultationNoteCreate
+from app.ws.manager import manager
 
 
 # Produce the next visit number for today.
@@ -163,7 +164,9 @@ async def list_visits(
     date_to: Optional[datetime],
     skip: int,
     limit: int,
-    db: AsyncDatabase
+    db: AsyncDatabase,
+    scope_role: Optional[str] = None,
+    scope_user_id: Optional[str] = None,
 ) -> List[VisitResponse]:
     query = {}
     if patient_id:
@@ -181,6 +184,22 @@ async def list_visits(
         if date_to:
             date_filter["$lte"] = date_to
         query["registered_at"] = date_filter
+
+    # Doctors and nurses see only patients assigned to them; admin, auditor,
+    # billing, and receptionist keep full visibility. Nurses also see the
+    # shared triage queue (patients not yet triaged / not yet assigned a nurse)
+    # so they can pick up new arrivals.
+    if scope_role == "doctor" and scope_user_id:
+        query["$or"] = [
+            {"assigned_doctor_id": scope_user_id},
+            {"assigned_doctor_id": {"$in": [None, ""]}, "status": "waiting_for_doctor"},
+        ]
+    elif scope_role == "nurse" and scope_user_id:
+        query["$or"] = [
+            {"triage_nurse_id": scope_user_id},
+            {"consultation_nurse_id": scope_user_id},
+            {"triage_nurse_id": {"$in": [None, ""]}, "status": {"$in": ["registered", "triaged", "waiting_for_doctor"]}},
+        ]
 
     cursor = db.visits.find(query).sort([("registered_at", -1)]).skip(skip).limit(limit)
     docs = []
@@ -283,6 +302,28 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
         return None
     result["id"] = str(result["_id"])
     result = await _enrich_visit_doc(result, db)
+
+    # Notify newly assigned staff that a patient has been assigned to them.
+    assign_rooms: list[str] = []
+    if data.assigned_doctor_id is not None:
+        assign_rooms.append(f"doctor:{data.assigned_doctor_id}")
+    if data.consultation_nurse_id is not None and result.get("department_id"):
+        assign_rooms.append(f"ward:{result['department_id']}")
+    if assign_rooms:
+        await manager.broadcast_multi(assign_rooms, {
+            "event_type": "patient.assigned",
+            "entity_id": result["id"],
+            "entity_type": "visit",
+            "message": f"Patient {result.get('patient_name') or ''} assigned to you",
+            "data": {
+                "visit_id": result["id"],
+                "visit_number": result.get("visit_number"),
+                "patient_name": result.get("patient_name"),
+                "consultation_room": result.get("consultation_room"),
+            },
+            "timestamp": now.isoformat(),
+        })
+
     return VisitResponse(**result)
 
 
@@ -417,6 +458,13 @@ async def discharge_patient(visit_id: str, user_id: str, db: AsyncDatabase) -> O
     })
     if unpaid:
         raise ValueError("Cannot discharge: the patient has an outstanding bill. Settle billing first.")
+
+    pending_rx = await db.prescriptions.find_one({
+        "visit_id": visit_id,
+        "status": {"$nin": ["administered", "archived", "cancelled"]},
+    })
+    if pending_rx:
+        raise ValueError("Cannot discharge: the patient has prescribed medication that has not been administered yet.")
 
     now = datetime.now(timezone.utc)
 

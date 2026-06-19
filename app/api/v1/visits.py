@@ -41,7 +41,8 @@ async def list_visits(
     db: AsyncDatabase = Depends(get_database)
 ):
     visits = await visit_service.list_visits(
-        patient_id, status, visit_type, department_id, date_from, date_to, skip, limit, db
+        patient_id, status, visit_type, department_id, date_from, date_to, skip, limit, db,
+        scope_role=current_user.role, scope_user_id=current_user.id,
     )
     return visits
 

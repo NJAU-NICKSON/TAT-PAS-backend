@@ -346,7 +346,7 @@ async def get_prescriptions(
     priority_rank = {p: i for i, p in enumerate(priority_order)}
     results.sort(key=lambda p: (
         priority_rank.get(p.priority.value if hasattr(p.priority, "value") else str(p.priority), 99),
-        p.submitted_at or datetime.now(timezone.utc),
+        _ensure_aware(p.submitted_at) or datetime.now(timezone.utc),
     ))
 
     return results
@@ -367,7 +367,7 @@ async def get_prescription_queue(
     priority_rank = {p: i for i, p in enumerate(["stat", "nicu", "urgent", "discharge", "routine", "chemo"])}
     results.sort(key=lambda p: (
         priority_rank.get(p.priority.value if hasattr(p.priority, "value") else str(p.priority), 99),
-        p.submitted_at or datetime.now(timezone.utc),
+        _ensure_aware(p.submitted_at) or datetime.now(timezone.utc),
     ))
     return results
 
@@ -682,36 +682,29 @@ async def advance_status(
     doctor_id_val = result.get("doctor_id")
     department_id_val = result.get("department_id")
 
+    doctor_room = [f"doctor:{str(doctor_id_val)}"] if doctor_id_val else []
+    ward_room = [f"ward:{str(department_id_val)}"] if department_id_val else []
+
     if new_status == "submitted":
-        await manager.broadcast("pharmacy", status_event)
-        await manager.broadcast("auditor", status_event)
+        # Awaiting the auditor's safety check before pharmacy.
+        await manager.broadcast_multi(["auditor", "admin"], status_event)
     elif new_status == "pending_amendment":
-        rooms = ["auditor"]
-        if doctor_id_val:
-            rooms.append(f"doctor:{str(doctor_id_val)}")
-        await manager.broadcast_multi(rooms, status_event)
+        await manager.broadcast_multi(["auditor", "admin"] + doctor_room, status_event)
     elif new_status == "flagged":
-        rooms = ["pharmacy", "auditor"]
-        if doctor_id_val:
-            rooms.append(f"doctor:{str(doctor_id_val)}")
-        await manager.broadcast_multi(rooms, status_event)
+        await manager.broadcast_multi(["pharmacy", "auditor", "admin"] + doctor_room, status_event)
     elif new_status == "verified":
-        rooms = ["pharmacy"]
-        if department_id_val:
-            rooms.append(f"ward:{str(department_id_val)}")
-        await manager.broadcast_multi(rooms, status_event)
+        # Approved by the auditor; pharmacy now processes it. Doctor, nurse,
+        # and auditor are informed it cleared review.
+        await manager.broadcast_multi(["pharmacy", "auditor", "admin"] + doctor_room + ward_room, status_event)
     elif new_status == "dispensed":
-        rooms = []
-        if department_id_val:
-            rooms.append(f"ward:{str(department_id_val)}")
-        if doctor_id_val:
-            rooms.append(f"doctor:{str(doctor_id_val)}")
-        await manager.broadcast_multi(rooms, status_event)
+        # Pharmacy has dispensed; meds are ready for the ward nurse to pick up.
+        await manager.broadcast_multi(["pharmacy", "receptionist", "admin"] + doctor_room + ward_room, status_event)
     elif new_status == "administered":
-        rooms = ["pharmacy"]
-        if doctor_id_val:
-            rooms.append(f"doctor:{str(doctor_id_val)}")
-        await manager.broadcast_multi(rooms, status_event)
+        # Administration is visible to everyone in the chain.
+        await manager.broadcast_multi(
+            ["pharmacy", "auditor", "receptionist", "admin"] + doctor_room + ward_room,
+            status_event,
+        )
 
     return _doc_to_prescription(result)
 
