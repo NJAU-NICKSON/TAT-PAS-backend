@@ -36,7 +36,10 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error("MongoDB connection error: %s", e)
 
-    await create_indexes(db)
+    try:
+        await create_indexes(db)
+    except Exception as e:
+        logger.error("Index creation skipped (DB unreachable at startup): %s", e)
     try:
         await start_scheduler()
     except Exception as e:
