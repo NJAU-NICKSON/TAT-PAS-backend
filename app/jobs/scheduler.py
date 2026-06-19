@@ -4,7 +4,11 @@ from apscheduler.triggers.cron import CronTrigger
 from app.db.client import get_database
 from app.jobs import sla_scanner
 
-scheduler = AsyncIOScheduler()
+# coalesce + max_instances guard against jobs piling up if a scan runs slow
+# (e.g. on a cold-started cloud instance).
+scheduler = AsyncIOScheduler(
+    job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 60}
+)
 
 # Start the background job scheduler.
 async def start_scheduler():

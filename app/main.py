@@ -130,6 +130,13 @@ async def general_exception_handler(request: Request, exc: Exception):
 async def root_redirect():
     return RedirectResponse(url="/docs")
 
+
+# Public liveness probe for the host (Render). No auth, no DB dependency.
+@app.get("/health", tags=["health"])
+async def health():
+    return {"status": "ok", "service": "tat-pas-backend"}
+
+
 # Detailed health check.
 @app.get("/api/v1/admin/health", tags=["admin"])
 async def health_check(
