@@ -6,7 +6,7 @@ from pydantic import field_validator
 
 # App configuration loaded from environment/.env.
 class Settings(BaseSettings):
-    MONGO_URI: str = "mongodb://localhost:27017"
+    MONGO_URI: str  
     MONGO_DB: str = "tatpas"
     JWT_SECRET: str
     JWT_ALGORITHM: str = "HS256"

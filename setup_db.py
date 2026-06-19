@@ -17,8 +17,11 @@ import sys
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import CollectionInvalid, OperationFailure
 
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-MONGO_DB  = os.getenv("MONGO_DB",  "tatpas")
+MONGO_URI = os.getenv("MONGO_URI")
+if not MONGO_URI:
+    print("ERROR: MONGO_URI environment variable not set. Check backend/.env", file=sys.stderr)
+    sys.exit(1)
+MONGO_DB  = os.getenv("MONGO_DB", "tatpas")
 
 ROLES = ["receptionist", "nurse", "doctor", "admin", "pharmacist", "billing", "auditor"]
 
