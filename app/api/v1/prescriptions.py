@@ -49,7 +49,7 @@ async def prescription_queue(
 async def create_prescription_endpoint(
     request: Request,
     body: PrescriptionCreate,
-    current_user=Depends(require_roles(Roles.doctor, Roles.admin, Roles.nurse)),
+    current_user=Depends(require_roles(Roles.doctor, Roles.nurse)),
     db: AsyncDatabase = Depends(get_database),
 ):
     prescription = await create_prescription(db, body, current_user.id)

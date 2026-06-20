@@ -233,8 +233,8 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
     now = datetime.now(timezone.utc)
     update_fields: dict = {"updated_at": now}
 
-    # Only the receptionist (and admin) may set or change the consultation room.
-    if data.consultation_room is not None and role not in (None, "receptionist", "admin"):
+    # Only the receptionist may set or change the consultation room.
+    if data.consultation_room is not None and role not in (None, "receptionist"):
         raise HTTPException(status_code=403, detail="Only the receptionist can assign the consultation room.")
 
     if data.status:

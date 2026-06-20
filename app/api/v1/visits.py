@@ -19,9 +19,9 @@ async def create_visit(
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
 ):
-    if current_user.role not in ["receptionist", "nurse", "admin"]:
+    if current_user.role not in ["receptionist", "nurse"]:
         raise HTTPException(status_code=403, detail="Not authorized to create visits")
-    
+
     visit = await visit_service.create_visit(data, current_user.id, db)
     return visit
 
@@ -60,7 +60,7 @@ async def get_visit(
     return visit
 
 
-# Update a visit's status or clinical fields.
+# Update a visit's status or clinical fields. Admin observes, does not act.
 @router.patch("/{visit_id}", response_model=VisitResponse)
 async def update_visit(
     visit_id: str,
@@ -68,13 +68,15 @@ async def update_visit(
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
 ):
+    if current_user.role not in ["receptionist", "nurse", "doctor", "billing"]:
+        raise HTTPException(status_code=403, detail="Not authorized to update visits")
     visit = await visit_service.update_visit(visit_id, data, current_user.id, db, role=current_user.role)
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
     return visit
 
 
-# Save the doctor's consultation note.
+# Save the doctor's consultation note. Doctor only.
 @router.post("/{visit_id}/consultation-note", response_model=ConsultationNote)
 async def add_consultation_note(
     visit_id: str,
@@ -82,7 +84,7 @@ async def add_consultation_note(
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
 ):
-    if current_user.role not in ["doctor", "admin"]:
+    if current_user.role != "doctor":
         raise HTTPException(status_code=403, detail="Only doctors can add consultation notes")
     note = await visit_service.add_consultation_note(visit_id, data, current_user.id, db)
     if not note:
@@ -103,7 +105,7 @@ async def get_consultation_note(
     return note
 
 
-# Record triage and assign a doctor/room.
+# Record triage vitals and (optionally) confirm the doctor. Nurse only.
 @router.post("/{visit_id}/triage", response_model=VisitResponse)
 async def triage_visit(
     visit_id: str,
@@ -111,7 +113,7 @@ async def triage_visit(
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
 ):
-    if current_user.role not in ["nurse", "admin"]:
+    if current_user.role != "nurse":
         raise HTTPException(status_code=403, detail="Only nurses can submit triage")
     visit = await visit_service.triage_visit(visit_id, data, current_user.id, db)
     if not visit:
@@ -127,7 +129,7 @@ async def admit_patient(
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
 ):
-    if current_user.role not in ["nurse", "admin", "doctor", "receptionist"]:
+    if current_user.role not in ["nurse", "doctor", "receptionist"]:
         raise HTTPException(status_code=403, detail="Not authorized to admit patients")
     visit = await visit_service.admit_patient(visit_id, data, current_user.id, db)
     if visit is None:
@@ -142,7 +144,7 @@ async def discharge_patient(
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
 ):
-    if current_user.role not in ["receptionist", "nurse", "admin"]:
+    if current_user.role not in ["receptionist", "nurse"]:
         raise HTTPException(status_code=403, detail="Not authorized to discharge patients")
     try:
         visit = await visit_service.discharge_patient(visit_id, current_user.id, db)

@@ -419,14 +419,14 @@ async def get_prescription_history(
 PERMITTED_TRANSITIONS = {
     "draft": {"submitted": ["doctor", "surgeon", "anaesthetist", "midwife"]},
     "submitted": {
-        "verified": ["auditor", "admin"],
-        "pending_amendment": ["auditor", "admin"],
-        "flagged": ["auditor", "admin"],
+        "verified": ["auditor"],
+        "pending_amendment": ["auditor"],
+        "flagged": ["auditor"],
     },
-    "pending_amendment": {"submitted": ["doctor", "surgeon", "anaesthetist", "midwife", "admin"]},
-    "flagged": {"verified": ["auditor", "admin"]},
-    "verified": {"dispensed": ["pharmacist", "admin"]},
-    "dispensed": {"administered": ["nurse", "admin"]},
+    "pending_amendment": {"submitted": ["doctor", "surgeon", "anaesthetist", "midwife"]},
+    "flagged": {"verified": ["auditor"]},
+    "verified": {"dispensed": ["pharmacist"]},
+    "dispensed": {"administered": ["nurse"]},
 }
 
 
@@ -473,17 +473,17 @@ async def advance_status(
         set_fields["receipt_number"] = update_data["receipt_number"]
 
     if role == "admin":
+        # Admin observes; the only state change it may perform is archiving.
+        # Clinical transitions belong to the accountable clinical role.
         if new_status != "archived":
-            allowed_roles = PERMITTED_TRANSITIONS.get(current_status, {}).get(new_status, [])
-            if not allowed_roles:
-                raise HTTPException(
-                    status_code=http_status.HTTP_400_BAD_REQUEST,
-                    detail={
-                        "code": "INVALID_STATUS_TRANSITION",
-                        "message": f"Cannot transition from {current_status} to {new_status}.",
-                        "details": {"from": current_status, "to": new_status},
-                    },
-                )
+            raise HTTPException(
+                status_code=http_status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "ADMIN_CLINICAL_FORBIDDEN",
+                    "message": "Admin cannot perform clinical prescription actions; only the responsible clinical role can.",
+                    "details": {"from": current_status, "to": new_status},
+                },
+            )
     else:
         if new_status == "archived":
             raise HTTPException(
@@ -514,7 +514,7 @@ async def advance_status(
                 },
             )
 
-    if new_status == "verified" and role not in ("admin",):
+    if new_status == "verified":
         unresolved_count = await db.audit_records.count_documents({
             "prescription_id": prescription_id,
             "resolved": False,

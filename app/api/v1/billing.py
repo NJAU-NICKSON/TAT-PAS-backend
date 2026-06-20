@@ -25,7 +25,7 @@ router = APIRouter(prefix="/bills", tags=["billing"])
 @router.post("/", response_model=Bill, status_code=status.HTTP_201_CREATED)
 async def create_bill_endpoint(
     data: BillCreate,
-    current_user: UserInDB = Depends(require_roles(Roles.receptionist, Roles.billing, Roles.admin)),
+    current_user: UserInDB = Depends(require_roles(Roles.receptionist, Roles.billing)),
     db: AsyncDatabase = Depends(get_database),
 ):
     try:
@@ -92,7 +92,7 @@ async def get_bill_detail(
 async def update_bill_endpoint(
     bill_id: str,
     update: BillUpdate,
-    current_user: UserInDB = Depends(require_roles(Roles.receptionist, Roles.billing, Roles.admin)),
+    current_user: UserInDB = Depends(require_roles(Roles.receptionist, Roles.billing)),
     db: AsyncDatabase = Depends(get_database),
 ):
     try:
@@ -106,7 +106,7 @@ async def update_bill_endpoint(
 async def record_payment(
     bill_id: str,
     payment: Payment,
-    current_user: UserInDB = Depends(require_roles(Roles.receptionist, Roles.billing, Roles.admin)),
+    current_user: UserInDB = Depends(require_roles(Roles.receptionist, Roles.billing)),
     db: AsyncDatabase = Depends(get_database),
 ):
     try:

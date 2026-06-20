@@ -331,7 +331,7 @@ MEDS_CATALOGUE = [
     [("Diclofenac", "50mg", "oral", "BD", 5)],
 ]
 
-SLA_BY_PRIORITY = {"stat": 30, "urgent": 60, "routine": 120, "critical": 30}
+SLA_BY_PRIORITY = {"stat": 15, "urgent": 30, "routine": 60, "discharge": 45, "nicu": 20, "chemo": 120, "critical": 15}
 
 
 def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):

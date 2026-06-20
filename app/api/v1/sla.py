@@ -29,11 +29,11 @@ async def get_config(
     return await get_sla_config(db)
 
 
-# Update the SLA threshold for a specific priority. Admin only.
+# Update the SLA threshold for a priority. Auditor owns compliance; admin configures.
 @router.put("/config")
 async def update_config(
     body: SLAConfigUpdate,
-    current_user=Depends(require_roles(Roles.admin)),
+    current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
 ):
     try:
