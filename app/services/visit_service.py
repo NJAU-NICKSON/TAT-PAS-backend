@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional, List
 from bson import ObjectId
+from fastapi import HTTPException
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo.errors import DuplicateKeyError
 from app.models.visit import VisitCreate, VisitInDB, VisitUpdate, VisitStatus, VisitResponse, TriageSubmit, AdmitPatient, ConsultationNote, ConsultationNoteCreate
@@ -223,7 +224,7 @@ async def list_visits(
 
 
 # Update visit status and/or clinical fields.
-async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: AsyncDatabase) -> Optional[VisitResponse]:
+async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: AsyncDatabase, role: Optional[str] = None) -> Optional[VisitResponse]:
     try:
         obj_id = ObjectId(visit_id)
     except Exception:
@@ -231,6 +232,10 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
 
     now = datetime.now(timezone.utc)
     update_fields: dict = {"updated_at": now}
+
+    # Only the receptionist (and admin) may set or change the consultation room.
+    if data.consultation_room is not None and role not in (None, "receptionist", "admin"):
+        raise HTTPException(status_code=403, detail="Only the receptionist can assign the consultation room.")
 
     if data.status:
         update_fields["status"] = data.status.value
@@ -279,6 +284,12 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
     if data.consultation_room is not None:
         update_fields["consultation_room"] = data.consultation_room
     if data.consultation_nurse_id is not None:
+        nurse_doc = await db.users.find_one(
+            {"_id": ObjectId(data.consultation_nurse_id)},
+            {"role": 1},
+        )
+        if not nurse_doc or nurse_doc.get("role") != "nurse":
+            raise HTTPException(status_code=422, detail="consultation_nurse_id must reference a user with role 'nurse'")
         update_fields["consultation_nurse_id"] = data.consultation_nurse_id
         update_fields["consultation_nurse_name"] = await _get_user_name(db, data.consultation_nurse_id)
     if data.diagnosis is not None:
@@ -303,12 +314,13 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
     result["id"] = str(result["_id"])
     result = await _enrich_visit_doc(result, db)
 
-    # Notify newly assigned staff that a patient has been assigned to them.
+    # Notify newly assigned staff directly via their personal rooms.
     assign_rooms: list[str] = []
     if data.assigned_doctor_id is not None:
         assign_rooms.append(f"doctor:{data.assigned_doctor_id}")
-    if data.consultation_nurse_id is not None and result.get("department_id"):
-        assign_rooms.append(f"ward:{result['department_id']}")
+        assign_rooms.append(f"user:{data.assigned_doctor_id}")
+    if data.consultation_nurse_id is not None:
+        assign_rooms.append(f"user:{data.consultation_nurse_id}")
     if assign_rooms:
         await manager.broadcast_multi(assign_rooms, {
             "event_type": "patient.assigned",
@@ -320,6 +332,8 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
                 "visit_number": result.get("visit_number"),
                 "patient_name": result.get("patient_name"),
                 "consultation_room": result.get("consultation_room"),
+                "assigned_doctor_name": result.get("assigned_doctor_name"),
+                "consultation_nurse_name": result.get("consultation_nurse_name"),
             },
             "timestamp": now.isoformat(),
         })
@@ -353,13 +367,9 @@ async def triage_visit(visit_id: str, data: TriageSubmit, nurse_id: str, db: Asy
     if data.assigned_doctor_id:
         doctor_doc = await db.users.find_one({"_id": ObjectId(data.assigned_doctor_id)}, {"role": 1})
         if not doctor_doc or doctor_doc.get("role") != "doctor":
-            from fastapi import HTTPException
             raise HTTPException(status_code=422, detail="assigned_doctor_id must reference a user with role 'doctor'")
         update_fields["assigned_doctor_id"] = data.assigned_doctor_id
         update_fields["assigned_doctor_name"] = await _get_user_name(db, data.assigned_doctor_id)
-
-    if data.consultation_room:
-        update_fields["consultation_room"] = data.consultation_room
 
     result = await db.visits.find_one_and_update(
         {"_id": obj_id},
@@ -667,10 +677,9 @@ async def add_consultation_note(
         upsert=True,
     )
 
+    # The receptionist owns room/nurse assignment, so the consultation note
+    # only records clinical fields back onto the visit.
     visit_update: dict = {
-        "consultation_room": data.consultation_room,
-        "consultation_nurse_id": data.assisting_nurse_id,
-        "consultation_nurse_name": nurse_name,
         "assigned_doctor_name": doctor_name,
         "diagnosis": data.diagnosis,
         "clinical_findings": data.clinical_findings,
@@ -679,8 +688,6 @@ async def add_consultation_note(
         "consultation_ended_at": now,
         "updated_at": now,
     }
-    if data.consultation_room:
-        visit_update["consultation_room"] = data.consultation_room
     await db.visits.update_one({"_id": obj_id}, {"$set": {k: v for k, v in visit_update.items() if v is not None}})
 
     note_doc = await db.consultation_notes.find_one({"visit_id": visit_id})

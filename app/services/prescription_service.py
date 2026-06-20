@@ -352,13 +352,15 @@ async def get_prescriptions(
     return results
 
 
-# Return active queue: submitted and flagged, sorted by priority then age.
+# Work queue for a role: auditors review, pharmacists dispense verified.
 async def get_prescription_queue(
     db: AsyncDatabase,
     skip: int = 0,
     limit: int = 50,
+    role: Optional[str] = None,
 ) -> List[PrescriptionInDB]:
-    query = {"status": {"$in": ["submitted", "flagged"]}}
+    statuses = ["verified"] if role == "pharmacist" else ["submitted", "flagged"]
+    query = {"status": {"$in": statuses}}
     docs_cursor = db.prescriptions.find(query).skip(skip).limit(limit)
     docs = await docs_cursor.to_list(length=limit)
     docs = await _enrich_docs_with_names(db, docs)
@@ -415,12 +417,12 @@ async def get_prescription_history(
 PERMITTED_TRANSITIONS = {
     "draft": {"submitted": ["doctor", "surgeon", "anaesthetist", "midwife"]},
     "submitted": {
-        "verified": ["pharmacist", "auditor", "admin"],
-        "pending_amendment": ["pharmacist", "auditor", "admin"],
-        "flagged": ["pharmacist", "auditor", "admin"],
+        "verified": ["auditor", "admin"],
+        "pending_amendment": ["auditor", "admin"],
+        "flagged": ["auditor", "admin"],
     },
     "pending_amendment": {"submitted": ["doctor", "surgeon", "anaesthetist", "midwife", "admin"]},
-    "flagged": {"verified": ["pharmacist", "auditor", "admin"]},
+    "flagged": {"verified": ["auditor", "admin"]},
     "verified": {"dispensed": ["pharmacist", "admin"]},
     "dispensed": {"administered": ["nurse", "admin"]},
 }
@@ -682,13 +684,14 @@ async def advance_status(
     doctor_id_val = result.get("doctor_id")
     department_id_val = result.get("department_id")
 
-    doctor_room = [f"doctor:{str(doctor_id_val)}"] if doctor_id_val else []
+    doctor_room = [f"doctor:{str(doctor_id_val)}", f"user:{str(doctor_id_val)}"] if doctor_id_val else []
     ward_room = [f"ward:{str(department_id_val)}"] if department_id_val else []
 
     if new_status == "submitted":
         # Awaiting the auditor's safety check before pharmacy.
         await manager.broadcast_multi(["auditor", "admin"], status_event)
     elif new_status == "pending_amendment":
+        # Auditor sent it back: the prescribing doctor must be told.
         await manager.broadcast_multi(["auditor", "admin"] + doctor_room, status_event)
     elif new_status == "flagged":
         await manager.broadcast_multi(["pharmacy", "auditor", "admin"] + doctor_room, status_event)

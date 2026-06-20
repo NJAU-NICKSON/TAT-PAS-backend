@@ -68,7 +68,7 @@ async def update_visit(
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
 ):
-    visit = await visit_service.update_visit(visit_id, data, current_user.id, db)
+    visit = await visit_service.update_visit(visit_id, data, current_user.id, db, role=current_user.role)
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
     return visit

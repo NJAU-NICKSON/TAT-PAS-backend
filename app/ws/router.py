@@ -74,15 +74,22 @@ async def websocket_endpoint(websocket: WebSocket):
     else:
         room = "general"
 
+    # Every user also joins a personal room so they can be notified directly
+    # regardless of department (e.g. a nurse assigned to a care team).
+    personal_room = f"user:{user_id}"
+    rooms = [room, personal_room]
+
     async with manager._lock:
-        if room not in manager.active_connections:
-            manager.active_connections[room] = []
-        manager.active_connections[room].append(websocket)
+        for r in rooms:
+            if r not in manager.active_connections:
+                manager.active_connections[r] = []
+            manager.active_connections[r].append(websocket)
 
     try:
         await websocket.send_text(json.dumps({"type": "auth_ok", "room": room}))
     except Exception:
-        await manager.disconnect(websocket, room)
+        for r in rooms:
+            await manager.disconnect(websocket, r)
         return
 
     # Send periodic pings to keep a WebSocket alive.
@@ -111,4 +118,5 @@ async def websocket_endpoint(websocket: WebSocket):
         pass
     finally:
         ping_task.cancel()
-        await manager.disconnect(websocket, room)
+        for r in rooms:
+            await manager.disconnect(websocket, r)

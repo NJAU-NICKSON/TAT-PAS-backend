@@ -26,8 +26,9 @@ from app.services import flagging_service
 
 router = APIRouter(prefix="/prescriptions", tags=["prescriptions"])
 
-_PHARMACIST_VISIBLE = ["submitted", "flagged", "verified", "dispensed"]
+_PHARMACIST_VISIBLE = ["verified", "dispensed"]
 _NURSE_VISIBLE = ["dispensed", "administered"]
+_AUDITOR_VISIBLE = ["submitted", "flagged", "pending_amendment", "verified"]
 
 nursing_role_values = [r.value for r in NURSING_ROLES]
 
@@ -40,7 +41,7 @@ async def prescription_queue(
     current_user=Depends(require_roles(Roles.pharmacist, Roles.admin, Roles.auditor)),
     db: AsyncDatabase = Depends(get_database),
 ):
-    return await get_prescription_queue(db, skip=skip, limit=limit)
+    return await get_prescription_queue(db, skip=skip, limit=limit, role=current_user.role)
 
 
 # Create a prescription and run safety checks.
@@ -123,6 +124,9 @@ async def list_prescriptions(
     elif role == Roles.pharmacist.value:
         if status_filter and status_filter not in _PHARMACIST_VISIBLE:
             return []
+    elif role == Roles.auditor.value:
+        if status_filter and status_filter not in _AUDITOR_VISIBLE:
+            return []
     elif role in nursing_role_values:
         if status_filter and status_filter not in _NURSE_VISIBLE:
             return []
@@ -144,6 +148,8 @@ async def list_prescriptions(
 
     if role == Roles.pharmacist.value and not status_filter:
         query["status"] = {"$in": _PHARMACIST_VISIBLE}
+    elif role == Roles.auditor.value and not status_filter:
+        query["status"] = {"$in": _AUDITOR_VISIBLE}
     elif role in nursing_role_values and not status_filter:
         query["status"] = {"$in": _NURSE_VISIBLE}
 
