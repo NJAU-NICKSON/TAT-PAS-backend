@@ -307,12 +307,14 @@ async def create_prescription(
         "data": {
             "priority": priority_str,
             "patient_id": prescription.patient_id,
+            "rx_number": rx_number,
             "sla_threshold_min": sla_threshold,
         },
         "timestamp": now.isoformat(),
         "triggered_by_role": "doctor",
     }
-    await manager.broadcast("pharmacy", event)
+    # New scripts go to the auditor for review before pharmacy.
+    await manager.broadcast_multi(["auditor", "admin"], event)
 
     return _doc_to_prescription(doc)
 
