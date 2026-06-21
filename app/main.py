@@ -188,14 +188,19 @@ async def health_check(
     unexpected_routes = []
     all_routes = []
 
-    # Enumerate the application's own routes. Use the module-level app (which
-    # holds every included router) rather than request.app, which under some
-    # ASGI servers resolves to a wrapper exposing only the base routes.
+    # Read route paths from the OpenAPI schema, falling back to app.routes.
+    route_paths: list[str] = []
+    try:
+        schema = app.openapi()
+        route_paths.extend(schema.get("paths", {}).keys())
+    except Exception:
+        pass
     for route in app.routes:
-        path = getattr(route, "path", None)
-        if not path:
-            continue
+        p = getattr(route, "path", None)
+        if p and p not in route_paths:
+            route_paths.append(p)
 
+    for path in route_paths:
         if path in ("/", "/docs", "/redoc", "/api/v1/admin/health"):
             continue
 
