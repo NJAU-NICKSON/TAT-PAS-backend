@@ -68,9 +68,16 @@ def _mg_per_day(med: dict) -> Optional[float]:
 # Run every safety rule against a prescription and collect flags.
 async def check_all_rules(prescription: dict, patient: dict, active_rxs: List[dict], db: AsyncDatabase) -> List[FlagResult]:
     flags = []
-    
+
+    # Load configurable dose limits (falls back to the built-in table).
+    try:
+        from app.services.dosing_service import get_dose_limit_map
+        limits_map = await get_dose_limit_map(db)
+    except Exception:
+        limits_map = _DOSE_LIMITS
+
     for med in prescription.get("medications", []):
-        flags.extend(await check_high_dose(med, patient))
+        flags.extend(await check_high_dose(med, patient, limits_map))
         flags.extend(await check_extended_duration(med))
         flags.extend(await check_duplicate_active_rx(med, active_rxs))
         flags.extend(await check_allergy_match(med, patient))
@@ -78,7 +85,7 @@ async def check_all_rules(prescription: dict, patient: dict, active_rxs: List[di
         flags.extend(await check_controlled_substance(med, db))
 
         if patient.get("is_paediatric"):
-            flags.extend(await check_paediatric_dose(med, patient))
+            flags.extend(await check_paediatric_dose(med, patient, limits_map))
 
         if patient.get("is_neonate"):
             flags.extend(await check_neonatal(med))
@@ -90,10 +97,10 @@ async def check_all_rules(prescription: dict, patient: dict, active_rxs: List[di
 
 
 # Flag a dose above the safe maximum, weight-adjusted where possible.
-async def check_high_dose(med: dict, patient: Optional[dict] = None) -> List[FlagResult]:
+async def check_high_dose(med: dict, patient: Optional[dict] = None, limits_map: Optional[dict] = None) -> List[FlagResult]:
     dose = med.get("dose", "")
     name = med.get("name", "")
-    limits = _DOSE_LIMITS.get(name.strip().lower())
+    limits = (limits_map or _DOSE_LIMITS).get(name.strip().lower())
     daily_mg = _mg_per_day(med)
     weight = (patient or {}).get("weight_kg")
 
@@ -236,14 +243,14 @@ async def check_controlled_substance(med: dict, db: AsyncDatabase) -> List[FlagR
 
 
 # Flag doses unsafe for a child's weight.
-async def check_paediatric_dose(med: dict, patient: dict) -> List[FlagResult]:
+async def check_paediatric_dose(med: dict, patient: dict, limits_map: Optional[dict] = None) -> List[FlagResult]:
     name = med.get("name", "")
     weight = patient.get("weight_kg")
     if not weight:
         return []
 
     daily_mg = _mg_per_day(med)
-    limits = _DOSE_LIMITS.get(name.strip().lower())
+    limits = (limits_map or _DOSE_LIMITS).get(name.strip().lower())
 
     # Known drug: compare against its paediatric mg/kg/day ceiling.
     if limits and daily_mg:

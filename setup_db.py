@@ -484,12 +484,12 @@ COLLECTIONS = {
         "validator": {
             "$jsonSchema": {
                 "bsonType": "object",
-                "required": ["priority", "threshold_minutes"],
+                "required": ["priority", "threshold_min"],
                 "additionalProperties": True,
                 "properties": {
-                    "priority":          {"bsonType": "string", "enum": PRIORITIES},
-                    "threshold_minutes": {"bsonType": "int"},
-                    "description":       {"bsonType": ["string", "null"]},
+                    "priority":      {"bsonType": "string", "enum": PRIORITIES},
+                    "threshold_min": {"bsonType": ["int", "double"]},
+                    "description":   {"bsonType": ["string", "null"]},
                 },
             }
         },
@@ -608,12 +608,12 @@ COLLECTIONS = {
 
 SEED_DATA = {
     "sla_config": [
-        {"priority": "stat",      "threshold_minutes": 15,  "description": "STAT orders must be processed within 15 minutes"},
-        {"priority": "urgent",    "threshold_minutes": 30,  "description": "Urgent orders must be processed within 30 minutes"},
-        {"priority": "routine",   "threshold_minutes": 60,  "description": "Routine orders must be processed within 60 minutes"},
-        {"priority": "discharge", "threshold_minutes": 45,  "description": "Discharge orders must be processed within 45 minutes"},
-        {"priority": "nicu",      "threshold_minutes": 20,  "description": "NICU orders must be processed within 20 minutes"},
-        {"priority": "chemo",     "threshold_minutes": 120, "description": "Chemotherapy orders must be processed within 120 minutes"},
+        {"priority": "stat",      "threshold_min": 15,  "description": "STAT orders must be processed within 15 minutes"},
+        {"priority": "urgent",    "threshold_min": 30,  "description": "Urgent orders must be processed within 30 minutes"},
+        {"priority": "routine",   "threshold_min": 60,  "description": "Routine orders must be processed within 60 minutes"},
+        {"priority": "discharge", "threshold_min": 45,  "description": "Discharge orders must be processed within 45 minutes"},
+        {"priority": "nicu",      "threshold_min": 20,  "description": "NICU orders must be processed within 20 minutes"},
+        {"priority": "chemo",     "threshold_min": 120, "description": "Chemotherapy orders must be processed within 120 minutes"},
     ],
     "drug_interactions": [
         {"drug_a": "warfarin",        "drug_b": "aspirin",        "severity": "high",   "interaction": "Increased bleeding risk",              "recommendation": "Monitor INR closely"},

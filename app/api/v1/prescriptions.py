@@ -153,7 +153,7 @@ async def list_prescriptions(
     elif role in nursing_role_values and not status_filter:
         query["status"] = {"$in": _NURSE_VISIBLE}
 
-    cursor = db.prescriptions.find(query).sort([("submitted_at", 1)]).skip(skip).limit(limit)
+    cursor = db.prescriptions.find(query).sort([("created_at", -1)]).skip(skip).limit(limit)
     docs = await cursor.to_list(length=limit)
     docs = await _enrich_docs_with_names(db, docs)
     return [_doc_to_prescription(doc) for doc in docs]

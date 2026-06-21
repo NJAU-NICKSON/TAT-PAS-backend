@@ -222,10 +222,13 @@ async def health_check(
                     "name": route.name
                 })
 
+    # Health reflects real runtime signals (DB + scheduler). Module route
+    # counts are informational; an empty count does not by itself mean the
+    # system is unhealthy (it can happen during a cold start).
     overall_status = "ok"
     if db_status != "ok":
         overall_status = "degraded"
-    elif any(count == 0 for count in module_counts.values()):
+    elif scheduler_status != "ok":
         overall_status = "degraded"
 
     now = datetime.now(timezone.utc)
