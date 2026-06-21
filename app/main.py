@@ -143,7 +143,6 @@ async def health():
 # Detailed health check.
 @app.get("/api/v1/admin/health", tags=["admin"])
 async def health_check(
-    request: Request,
     full: bool = False,
     current_user=Depends(require_roles(Roles.admin)),
 ):
@@ -189,7 +188,10 @@ async def health_check(
     unexpected_routes = []
     all_routes = []
 
-    for route in request.app.routes:
+    # Enumerate the application's own routes. Use the module-level app (which
+    # holds every included router) rather than request.app, which under some
+    # ASGI servers resolves to a wrapper exposing only the base routes.
+    for route in app.routes:
         path = getattr(route, "path", None)
         if not path:
             continue
