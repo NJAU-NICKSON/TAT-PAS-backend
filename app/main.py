@@ -215,19 +215,10 @@ async def health_check(
             unexpected_routes.append(path)
 
         if full:
-            methods = getattr(route, "methods", None)
-            if methods:
-                all_routes.append({
-                    "path": path,
-                    "methods": list(methods),
-                    "name": route.name
-                })
-            else:
-                all_routes.append({
-                    "path": path,
-                    "type": "websocket" if "websocket" in str(route).lower() else "other",
-                    "name": route.name
-                })
+            all_routes.append({"path": path})
+
+    # The WebSocket route is not in the OpenAPI schema; count it from its router.
+    module_counts["websocket"] = len(getattr(ws_router.router, "routes", []) or [])
 
     # Health reflects real runtime signals (DB + scheduler). Module route
     # counts are informational; an empty count does not by itself mean the
