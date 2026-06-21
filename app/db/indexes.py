@@ -133,6 +133,16 @@ async def create_indexes(db: AsyncDatabase) -> None:
     if not await index_exists(collection, [("drug", ASCENDING)]):
         await collection.create_index("drug", unique=True)
 
+    collection = db.activity_log
+    if not await index_exists(collection, [("created_at", DESCENDING)]):
+        await collection.create_index([("created_at", DESCENDING)], name="activity_created")
+    if not await index_exists(collection, [("user_id", ASCENDING)]):
+        await collection.create_index("user_id", name="activity_user")
+
+    collection = db.price_catalogue
+    if not await index_exists(collection, [("code", ASCENDING)]):
+        await collection.create_index("code", unique=True)
+
     collection = db.daily_reports
     if not await index_exists(collection, [("date", ASCENDING)]):
         await collection.create_index([("date", ASCENDING)], unique=True)

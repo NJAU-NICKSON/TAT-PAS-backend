@@ -69,6 +69,17 @@ class PrescriptionUpdate(BaseModel):
     administered_time_actual: Optional[str] = None
     administration_notes: Optional[str] = None
     receipt_number: Optional[str] = None
+    medications: Optional[List[MedicationItem]] = None
+    amendment_note: Optional[str] = None
+
+
+# One immutable past version of a prescription's medications.
+class PrescriptionRevision(BaseModel):
+    medications: List[MedicationItem]
+    notes: Optional[str] = None
+    revised_at: datetime
+    revised_by: Optional[str] = None
+    reason: Optional[str] = None
 
 # Prescription as stored, with TAT fields.
 class PrescriptionInDB(BaseModel):
@@ -96,9 +107,12 @@ class PrescriptionInDB(BaseModel):
     auditor_approved_at: Optional[datetime] = None
     returned_at: Optional[datetime] = None
     return_reason: Optional[str] = None
+    resubmitted_at: Optional[datetime] = None
+    amendment_count: int = 0
+    revisions: List[PrescriptionRevision] = []
     medications: List[MedicationItem]
     status: PrescriptionStatus
-    
+
     ordered_at: Optional[datetime] = None
     submitted_at: Optional[datetime] = None
     verified_at: Optional[datetime] = None

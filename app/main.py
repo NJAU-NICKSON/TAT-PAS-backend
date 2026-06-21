@@ -10,7 +10,7 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from app.api.v1 import auth, users, patients, prescriptions, audits, analytics, departments, beds, visits, billing, sla, consultation_rooms
+from app.api.v1 import auth, users, patients, prescriptions, audits, analytics, departments, beds, visits, billing, sla, consultation_rooms, activity
 from app.config import get_settings
 from app.db.client import connect_db, close_db, get_database
 from app.db.indexes import create_indexes
@@ -84,6 +84,7 @@ app.include_router(visits.router, prefix="/api/v1")
 app.include_router(billing.router, prefix="/api/v1")
 app.include_router(sla.router, prefix="/api/v1")
 app.include_router(consultation_rooms.router, prefix="/api/v1")
+app.include_router(activity.router, prefix="/api/v1")
 app.include_router(ws_router.router, prefix="")
 
 # Return 429 when a rate limit is hit.
@@ -181,6 +182,7 @@ async def health_check(
         "billing": "/api/v1/bills",
         "sla": "/api/v1/sla",
         "consultation_rooms": "/api/v1/consultation-rooms",
+        "activity": "/api/v1/activity",
         "websocket": "/ws",
     }
 

@@ -12,6 +12,7 @@ from app.security.rbac import get_current_user
 from app.services.auth_service import authenticate_user, create_tokens, verify_password_for_user
 from app.services.user_service import update_user
 from app.services.audit_service import create_security_audit
+from app.services.activity_service import log_action
 
 limiter = Limiter(key_func=get_remote_address)
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -46,6 +47,11 @@ async def login(
         {"$set": {"last_login": now}},
     )
     user.last_login = now
+    await log_action(
+        db, action="login", user_id=user.id, user_role=user.role, user_name=user.full_name,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
     return create_tokens(user)
 
 
@@ -101,8 +107,15 @@ async def refresh_token(
 # Invalidate the current session.
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
+    request: Request,
     current_user=Depends(get_current_user),
+    db: AsyncDatabase = Depends(get_database),
 ):
+    await log_action(
+        db, action="logout", user_id=current_user.id, user_role=current_user.role,
+        user_name=current_user.full_name,
+        ip_address=request.client.host if request.client else None,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

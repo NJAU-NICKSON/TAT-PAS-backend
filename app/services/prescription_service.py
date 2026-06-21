@@ -172,6 +172,9 @@ def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
         auditor_approved_at=doc.get("auditor_approved_at"),
         returned_at=doc.get("returned_at"),
         return_reason=doc.get("return_reason"),
+        resubmitted_at=doc.get("resubmitted_at"),
+        amendment_count=doc.get("amendment_count", 0),
+        revisions=doc.get("revisions", []),
         weight_kg=doc.get("weight_kg"),
         patient_name=doc.get("patient_name"),
         doctor_name=doc.get("doctor_name"),
@@ -530,11 +533,31 @@ async def advance_status(
                 },
             )
 
+    push_ops: dict = {}
+
     if new_status == "submitted":
         set_fields["submitted_at"] = now
         ordered_at = _ensure_aware(old_doc.get("ordered_at"))
         if ordered_at:
             set_fields["tat_order_to_submit_min"] = (now - ordered_at).total_seconds() / 60
+
+        # Resubmit after the auditor sent it back: keep the prior version as an
+        # immutable revision and apply the doctor's edited medications.
+        if current_status == "pending_amendment":
+            set_fields["resubmitted_at"] = now
+            set_fields["amendment_count"] = old_doc.get("amendment_count", 0) + 1
+            push_ops["revisions"] = {
+                "medications": old_doc.get("medications", []),
+                "notes": old_doc.get("notes"),
+                "revised_at": now,
+                "revised_by": user_id,
+                "reason": old_doc.get("return_reason"),
+            }
+            new_meds = update_data.get("medications")
+            if new_meds:
+                set_fields["medications"] = new_meds
+            if update_data.get("amendment_note") is not None:
+                set_fields["notes"] = update_data["amendment_note"]
 
     elif new_status == "pending_amendment":
         set_fields["returned_at"] = now
@@ -638,9 +661,12 @@ async def advance_status(
         if ordered_at:
             set_fields["tat_total_min"] = (now - ordered_at).total_seconds() / 60
 
+    update_ops: dict = {"$set": set_fields}
+    if push_ops:
+        update_ops["$push"] = push_ops
     result = await db.prescriptions.find_one_and_update(
         {"_id": obj_id},
-        {"$set": set_fields},
+        update_ops,
         return_document=True,
     )
 

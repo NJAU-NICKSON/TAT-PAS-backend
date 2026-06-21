@@ -23,6 +23,7 @@ from app.services.prescription_service import (
     _enrich_docs_with_names,
 )
 from app.services import flagging_service
+from app.services.activity_service import log_action
 
 router = APIRouter(prefix="/prescriptions", tags=["prescriptions"])
 
@@ -213,10 +214,13 @@ async def update_prescription_status(
 
     update_data = {}
     for field in ("notes", "pharmacist_comment", "return_reason", "administered_dose",
-                  "administered_route", "administered_time_actual", "administration_notes", "receipt_number"):
+                  "administered_route", "administered_time_actual", "administration_notes",
+                  "receipt_number", "amendment_note"):
         val = getattr(body, field, None)
         if val is not None:
             update_data[field] = val
+    if body.medications is not None:
+        update_data["medications"] = [m.model_dump() for m in body.medications]
 
     updated = await advance_status(
         db=db,
@@ -230,6 +234,15 @@ async def update_prescription_status(
     )
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prescription not found.")
+
+    await log_action(
+        db, action=f"prescription_{body.status.value}", user_id=current_user.id,
+        user_role=current_user.role, user_name=getattr(current_user, "full_name", None),
+        entity_type="prescription", entity_id=prescription_id,
+        detail=f"{updated.rx_number or prescription_id} -> {body.status.value}",
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
     return updated
 
 
