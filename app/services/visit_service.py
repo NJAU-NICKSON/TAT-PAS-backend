@@ -100,7 +100,10 @@ async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase)
 
     doc["_id"] = result.inserted_id
     doc["id"] = str(doc["_id"])
-    return VisitInDB(**doc)
+    # Attach display names (patient, staff) before returning so callers
+    # can safely access `patient_name` and other enriched fields.
+    doc = await _enrich_visit_doc(doc, db)
+    return VisitResponse(**doc)
 
 
 # Look up a patient's display name.

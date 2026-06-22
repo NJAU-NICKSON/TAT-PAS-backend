@@ -111,7 +111,7 @@ async def list_bills(
     limit: int = Query(100, ge=1, le=500),
     visit_id: Optional[str] = Query(None, description="Filter by visit ID"),
     all_statuses: bool = Query(False, description="Include all statuses (not just open/partially_paid)"),
-    current_user: UserInDB = Depends(require_roles(Roles.billing, Roles.admin, Roles.auditor)),
+    current_user: UserInDB = Depends(require_roles(Roles.billing, Roles.admin, Roles.auditor, Roles.receptionist)),
     db: AsyncDatabase = Depends(get_database),
 ):
     if all_statuses or visit_id:
@@ -124,7 +124,7 @@ async def list_bills(
 async def revenue_summary(
     start_date: str,
     end_date: str,
-    current_user: UserInDB = Depends(require_roles(Roles.billing, Roles.admin, Roles.auditor)),
+    current_user: UserInDB = Depends(require_roles(Roles.billing, Roles.admin, Roles.auditor, Roles.receptionist)),
     db: AsyncDatabase = Depends(get_database),
 ):
     try:

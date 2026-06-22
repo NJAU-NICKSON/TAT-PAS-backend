@@ -22,7 +22,7 @@ async def create_visit(
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
 ):
-    if current_user.role not in ["receptionist", "nurse"]:
+    if current_user.role != "receptionist":
         raise HTTPException(status_code=403, detail="Not authorized to create visits")
 
     visit = await visit_service.create_visit(data, current_user.id, db)

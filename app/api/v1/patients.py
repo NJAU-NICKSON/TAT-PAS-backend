@@ -140,7 +140,7 @@ async def create_new_patient(
     request: Request,
     body: PatientCreate,
     force: bool = Query(False, description="Register even if a possible duplicate exists"),
-    current_user=Depends(require_roles(Roles.receptionist, Roles.admin, Roles.nurse)),
+    current_user=Depends(require_roles(Roles.receptionist)),
     db: AsyncDatabase = Depends(get_database),
 ):
     if body.mrn:
