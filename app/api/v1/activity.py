@@ -35,7 +35,7 @@ async def get_activity(
     user_role: Optional[str] = Query(None),
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=500),
-    current_user=Depends(require_roles(Roles.admin, Roles.auditor)),
+    current_user=Depends(require_roles(Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
 ):
     return await list_activity(db, action=action, user_role=user_role, skip=skip, limit=limit)

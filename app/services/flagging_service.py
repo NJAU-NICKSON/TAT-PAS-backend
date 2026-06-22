@@ -77,15 +77,12 @@ async def check_all_rules(prescription: dict, patient: dict, active_rxs: List[di
         limits_map = _DOSE_LIMITS
 
     for med in prescription.get("medications", []):
-        flags.extend(await check_high_dose(med, patient, limits_map))
+        flags.extend(await check_dose_for_age(med, patient, limits_map))
         flags.extend(await check_extended_duration(med))
         flags.extend(await check_duplicate_active_rx(med, active_rxs))
         flags.extend(await check_allergy_match(med, patient))
         flags.extend(await check_drug_drug_interaction(med, prescription, db))
         flags.extend(await check_controlled_substance(med, db))
-
-        if patient.get("is_paediatric"):
-            flags.extend(await check_paediatric_dose(med, patient, limits_map))
 
         if patient.get("is_neonate"):
             flags.extend(await check_neonatal(med))
@@ -96,51 +93,76 @@ async def check_all_rules(prescription: dict, patient: dict, active_rxs: List[di
     return flags
 
 
-# Flag a dose above the safe maximum, weight-adjusted where possible.
-async def check_high_dose(med: dict, patient: Optional[dict] = None, limits_map: Optional[dict] = None) -> List[FlagResult]:
+# Flag a dose against the age band for the patient: picks the band by age,
+# flags if no band covers the age, then checks mg/kg/day and the absolute
+# daily ceiling for that band.
+async def check_dose_for_age(med: dict, patient: Optional[dict] = None, limits_map: Optional[dict] = None) -> List[FlagResult]:
     dose = med.get("dose", "")
     name = med.get("name", "")
     limits = (limits_map or _DOSE_LIMITS).get(name.strip().lower())
     daily_mg = _mg_per_day(med)
-    weight = (patient or {}).get("weight_kg")
 
-    # Weight-based check for known drugs when we have a weight: compares the
-    # ordered mg/kg/day against the drug's paediatric ceiling.
-    if limits and daily_mg and weight:
-        mg_per_kg_day = daily_mg / weight
-        if mg_per_kg_day > limits["max_mg_per_kg_day"]:
-            return [FlagResult(
-                code="high_dose",
-                severity=AuditSeverity.high,
-                issue=f"Dose exceeds weight-based limit: {mg_per_kg_day:.1f} mg/kg/day for {name} (max {limits['max_mg_per_kg_day']} mg/kg/day)",
-                recommendation="Recalculate the dose for the patient's weight before dispensing.",
-                drug_name=name,
-                dose=dose,
-            )]
-
-    # Absolute daily ceiling for known drugs (catches adult overdoses too).
-    if limits and daily_mg and daily_mg > limits["abs_max_mg_day"]:
-        return [FlagResult(
-            code="high_dose",
-            severity=AuditSeverity.high,
-            issue=f"Dose exceeds maximum daily limit: {daily_mg:.0f} mg/day for {name} (max {limits['abs_max_mg_day']} mg/day)",
-            recommendation="Verify the dose; it is above the recommended daily maximum.",
-            drug_name=name,
-            dose=dose,
-        )]
-
-    # Generic fallback for drugs without a reference entry.
+    # Unknown drug: conservative flat fallback.
     if not limits:
         per_dose = _parse_mg(dose)
         if per_dose and per_dose > 1000:
             return [FlagResult(
-                code="high_dose",
-                severity=AuditSeverity.medium,
+                code="high_dose", severity=AuditSeverity.medium,
                 issue=f"High dose detected: {dose} for {name}",
                 recommendation="Verify dose is correct and appropriate for the patient.",
-                drug_name=name,
-                dose=dose,
+                drug_name=name, dose=dose,
             )]
+        return []
+
+    bands = limits.get("bands") or []
+    from app.models.patient import compute_age
+    age = compute_age((patient or {}).get("dob"))
+
+    band = None
+    if age is not None and bands:
+        from app.services.dosing_service import band_for_age
+        band = band_for_age(bands, age)
+        # No band covers this age -> drug not approved for this age.
+        if band is None:
+            return [FlagResult(
+                code="age_restriction", severity=AuditSeverity.high,
+                issue=f"{name} is not approved for age {age} (no dosing band covers this age)",
+                recommendation="Do not dispense for this age. Confirm an age-appropriate alternative.",
+                drug_name=name, dose=dose,
+            )]
+
+    # If we have no age, use the widest (adult) band as a fallback ceiling.
+    if band is None and bands:
+        band = max(bands, key=lambda b: b.get("abs_max_mg_day", 0))
+    if band is None:
+        return []
+
+    weight = (patient or {}).get("weight_kg")
+    max_kg = band.get("max_mg_per_kg_day") or 0
+    max_abs = band.get("abs_max_mg_day") or 0
+
+    # Weight-based check within the band (primary safeguard for children).
+    if daily_mg and weight and max_kg > 0:
+        mg_per_kg_day = daily_mg / weight
+        if mg_per_kg_day > max_kg:
+            age_txt = f" (age band {band['min_age_years']}-{band['max_age_years']})" if age is not None else ""
+            return [FlagResult(
+                code="high_dose", severity=AuditSeverity.high,
+                issue=f"Dose exceeds weight-based limit: {mg_per_kg_day:.1f} mg/kg/day for {name}{age_txt} (max {max_kg} mg/kg/day)",
+                recommendation="Recalculate the dose for the patient's weight and age.",
+                drug_name=name, dose=dose,
+            )]
+
+    # Absolute daily ceiling for this age band.
+    if daily_mg and max_abs and daily_mg > max_abs:
+        age_txt = f" for age {age}" if age is not None else ""
+        return [FlagResult(
+            code="high_dose", severity=AuditSeverity.high,
+            issue=f"Dose exceeds the daily limit{age_txt}: {daily_mg:.0f} mg/day for {name} (max {max_abs} mg/day)",
+            recommendation="Verify the dose; it is above the recommended daily maximum for this age.",
+            drug_name=name, dose=dose,
+        )]
+
     return []
 
 
@@ -238,42 +260,6 @@ async def check_controlled_substance(med: dict, db: AsyncDatabase) -> List[FlagR
             recommendation="Verify prescription authorization and documentation",
             drug_name=med.get("name", ""),
             dose=med.get("dose", "")
-        )]
-    return []
-
-
-# Flag doses unsafe for a child's weight.
-async def check_paediatric_dose(med: dict, patient: dict, limits_map: Optional[dict] = None) -> List[FlagResult]:
-    name = med.get("name", "")
-    weight = patient.get("weight_kg")
-    if not weight:
-        return []
-
-    daily_mg = _mg_per_day(med)
-    limits = (limits_map or _DOSE_LIMITS).get(name.strip().lower())
-
-    # Known drug: compare against its paediatric mg/kg/day ceiling.
-    if limits and daily_mg:
-        mg_per_kg_day = daily_mg / weight
-        if mg_per_kg_day > limits["max_mg_per_kg_day"]:
-            return [FlagResult(
-                code="paediatric_high_dose",
-                severity=AuditSeverity.high,
-                issue=f"High paediatric dose: {mg_per_kg_day:.1f} mg/kg/day for {name} (max {limits['max_mg_per_kg_day']} mg/kg/day)",
-                recommendation="Verify the paediatric dosing calculation for the child's weight.",
-                drug_name=name,
-                dose=med.get("dose", ""),
-            )]
-
-    # Unknown drug: generic 25 mg/kg/day caution threshold for a child.
-    if not limits and daily_mg and (daily_mg / weight) > 25:
-        return [FlagResult(
-            code="paediatric_high_dose",
-            severity=AuditSeverity.medium,
-            issue=f"High paediatric dose: {daily_mg / weight:.1f} mg/kg/day for {name}",
-            recommendation="Confirm the dose is appropriate for the child's weight.",
-            drug_name=name,
-            dose=med.get("dose", ""),
         )]
     return []
 

@@ -518,10 +518,12 @@ async def advance_status(
             )
 
     if new_status == "verified":
+        # Only genuine clinical flags block verification. SLA breach/warning
+        # records are timing alerts for reporting, not verification blockers.
         unresolved_count = await db.audit_records.count_documents({
             "prescription_id": prescription_id,
             "resolved": False,
-            "type": {"$nin": ["resolution", "countersign", "status_change"]},
+            "type": {"$nin": ["resolution", "countersign", "status_change", "sla_breach", "sla_warning"]},
         })
         if unresolved_count > 0:
             raise HTTPException(

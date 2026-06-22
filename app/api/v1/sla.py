@@ -21,12 +21,19 @@ class SLAConfigUpdate(BaseModel):
     threshold_min: float = Field(..., gt=0)
 
 
-# Request body to update a drug's dose limits.
+# One age band within a drug's dose limits.
+class DoseBand(BaseModel):
+    min_age_years: float = Field(..., ge=0)
+    max_age_years: float = Field(..., gt=0)
+    max_mg_per_kg_day: float = Field(..., ge=0)
+    abs_max_mg_day: float = Field(..., gt=0)
+
+
+# Request body to update a drug's age-banded dose limits.
 class DoseLimitUpdate(BaseModel):
     drug: str
     adult_max_single_mg: float = Field(..., gt=0)
-    max_mg_per_kg_day: float = Field(..., gt=0)
-    abs_max_mg_day: float = Field(..., gt=0)
+    bands: List[DoseBand] = Field(..., min_length=1)
 
 
 # Return SLA thresholds for all prescription priorities.
@@ -85,8 +92,7 @@ async def update_dose_limit_endpoint(
             db,
             drug=body.drug,
             adult_max_single_mg=body.adult_max_single_mg,
-            max_mg_per_kg_day=body.max_mg_per_kg_day,
-            abs_max_mg_day=body.abs_max_mg_day,
+            bands=[b.model_dump() for b in body.bands],
             updated_by=current_user.id,
         )
     except ValueError as exc:
