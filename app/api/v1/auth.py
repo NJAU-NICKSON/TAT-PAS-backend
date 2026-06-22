@@ -9,7 +9,7 @@ from app.db.client import get_database
 from app.models.user import ChangePasswordRequest, TokenResponse, UserInDB, UserUpdate
 from app.security.jwt import decode_token
 from app.security.rbac import get_current_user
-from app.services.auth_service import authenticate_user, create_tokens, verify_password_for_user
+from app.services.auth_service import authenticate_user, create_tokens, verify_password_for_user, AccountDeactivatedError
 from app.services.user_service import update_user
 from app.services.audit_service import create_security_audit
 from app.services.activity_service import log_action
@@ -26,7 +26,13 @@ async def login(
     db: AsyncDatabase = Depends(get_database),
     form_data: OAuth2PasswordRequestForm = Depends(),
 ):
-    user = await authenticate_user(form_data.username, form_data.password, db)
+    try:
+        user = await authenticate_user(form_data.username, form_data.password, db)
+    except AccountDeactivatedError:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Your account access is restricted. Please contact management for assistance.",
+        )
     if not user:
         await create_security_audit(
             db=db,

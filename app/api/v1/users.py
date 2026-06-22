@@ -1,4 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from app.services.activity_service import log_action
 from pymongo.asynchronous.database import AsyncDatabase
 from app.db.client import get_database
 from app.models.user import UserCreate, UserResponse, UserUpdate
@@ -34,6 +35,7 @@ async def list_users(
 # Create a staff account.
 @router.post("/", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def create_new_user(
+    request: Request,
     body: UserCreate,
     current_user=Depends(require_roles(Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
@@ -46,7 +48,14 @@ async def create_new_user(
             status_code=status.HTTP_409_CONFLICT,
             detail="Username or email already exists",
         )
-    return await create_user(db, body)
+    user = await create_user(db, body)
+    await log_action(
+        db, action="staff_account_created", user_id=current_user.id, user_role=current_user.role,
+        user_name=getattr(current_user, "full_name", None), entity_type="user", entity_id=str(getattr(user, "id", "")),
+        detail=f"{body.username} ({body.role})",
+        ip_address=request.client.host if request.client else None,
+    )
+    return user
 
 
 # Fetch one user by ID.
@@ -98,6 +107,7 @@ async def update_existing_user(
 # Deactivate (soft-delete) a user. Blocks login but preserves the record
 @router.delete("/{user_id}", response_model=UserResponse)
 async def deactivate_user(
+    request: Request,
     user_id: str,
     current_user=Depends(require_roles(Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
@@ -113,6 +123,12 @@ async def deactivate_user(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found",
         )
+    await log_action(
+        db, action="staff_account_deactivated", user_id=current_user.id, user_role=current_user.role,
+        user_name=getattr(current_user, "full_name", None), entity_type="user", entity_id=user_id,
+        detail=f"Deactivated {getattr(updated, 'username', user_id)}",
+        ip_address=request.client.host if request.client else None,
+    )
     return updated
 
 

@@ -1,5 +1,5 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pymongo.asynchronous.database import AsyncDatabase
 from pydantic import BaseModel, Field
 from app.db.client import get_database
@@ -11,6 +11,7 @@ from app.services.sla_service import (
     get_breach_count,
 )
 from app.services.dosing_service import get_dose_limits, update_dose_limit
+from app.services.activity_service import log_action
 
 router = APIRouter(prefix="/sla", tags=["sla"])
 
@@ -48,6 +49,7 @@ async def get_config(
 # Update the SLA threshold for a priority. Auditor owns compliance; admin configures.
 @router.put("/config")
 async def update_config(
+    request: Request,
     body: SLAConfigUpdate,
     current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
@@ -68,6 +70,12 @@ async def update_config(
                 "details": {"priority": body.priority},
             },
         )
+    await log_action(
+        db, action="sla_config_updated", user_id=current_user.id, user_role=current_user.role,
+        user_name=getattr(current_user, "full_name", None), entity_type="sla_config", entity_id=body.priority,
+        detail=f"{body.priority} threshold set to {body.threshold_min} min",
+        ip_address=request.client.host if request.client else None,
+    )
     return result
 
 
@@ -83,12 +91,13 @@ async def dose_limits(
 # Update the dose limits for one drug. Auditor (compliance) or admin.
 @router.put("/dose-limits")
 async def update_dose_limit_endpoint(
+    request: Request,
     body: DoseLimitUpdate,
     current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
     db: AsyncDatabase = Depends(get_database),
 ):
     try:
-        return await update_dose_limit(
+        result = await update_dose_limit(
             db,
             drug=body.drug,
             adult_max_single_mg=body.adult_max_single_mg,
@@ -100,6 +109,13 @@ async def update_dose_limit_endpoint(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"code": "INVALID_DOSE_LIMIT", "message": str(exc), "details": {"drug": body.drug}},
         )
+    await log_action(
+        db, action="dose_limit_updated", user_id=current_user.id, user_role=current_user.role,
+        user_name=getattr(current_user, "full_name", None), entity_type="dose_limit", entity_id=body.drug,
+        detail=f"{body.drug} dose limits updated ({len(body.bands)} age band(s))",
+        ip_address=request.client.host if request.client else None,
+    )
+    return result
 
 
 # All active SLA breaches. Updated on each request.

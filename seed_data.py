@@ -6,7 +6,8 @@ from bson import ObjectId
 random.seed(2026)
 
 NOW = datetime.utcnow()
-WINDOW_DAYS = 60
+# Window spans roughly April-June so all three recent months are represented.
+WINDOW_DAYS = 83
 
 
 def oid():
@@ -121,7 +122,8 @@ def build_patients():
                 "relationship": KIN_RELS[i % len(KIN_RELS)],
                 "phone": _phone(i + 5),
             },
-            "created_at": NOW - timedelta(days=WINDOW_DAYS + i),
+            # Patient records created within the 2-month window, spread across it.
+            "created_at": NOW - timedelta(days=(i % WINDOW_DAYS), hours=random.randint(0, 23)),
         }
 
         if i % 2 == 0:
@@ -366,8 +368,16 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
         else:
             rx_status = random.choice(["verified", "dispensed", "administered", "administered"])
 
+        # Paediatric patients get a clear per-kg overdose so the age-banded
+        # dose check is visible in the seeded data.
+        person = PEOPLE[p_idx]
+        is_child = person[2] >= "2014"  # dob year -> roughly under ~12
         flags = []
-        if n % 6 == 2:
+        if is_child and n % 3 == 0:
+            meds = [{"name": "Ibuprofen", "dose": "400mg", "route": "oral", "frequency": "TDS", "duration_days": 5}]
+            flags = ["high_dose"]
+            rx_status = random.choice(["submitted", "flagged"])
+        elif n % 6 == 2:
             flags = [random.choice(["high_dose", "drug_interaction", "allergy_match"])]
             if rx_status in ("draft",):
                 rx_status = "flagged"
@@ -455,7 +465,7 @@ def build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids):
 
 
 FLAG_DETAIL = {
-    "high_dose": ("critical", "Dose exceeds the safe maximum for this medication"),
+    "high_dose": ("high", "Dose exceeds the weight-based limit (mg/kg/day) for the patient's age band"),
     "allergy_match": ("critical", "Prescribed drug matches a documented patient allergy"),
     "drug_interaction": ("high", "Potential major interaction with the patient's other drugs"),
 }

@@ -7,6 +7,11 @@ from app.security.jwt import create_access_token, create_refresh_token
 
 
 # Verify a username/password and return the user if valid.
+# Raised when valid credentials belong to a deactivated account.
+class AccountDeactivatedError(Exception):
+    pass
+
+
 async def authenticate_user(
     username: str, password: str, db: AsyncDatabase
 ) -> Optional[UserInDB]:
@@ -15,8 +20,9 @@ async def authenticate_user(
         return None
     if not verify_password(password, user_doc["password_hash"]):
         return None
+    # Credentials are correct but the account is disabled: signal distinctly.
     if user_doc.get("is_active", True) is False:
-        return None
+        raise AccountDeactivatedError()
     user_doc["_id"] = str(user_doc["_id"])
     return UserInDB(**user_doc)
 

@@ -243,9 +243,6 @@ def seed(fresh=False):
             b["status"] = "occupied"
             b["current_patient_id"] = bed_patient.get(bid)
 
-    # Build the tamper-evident hash chain for audit records using the same
-    # function the live app uses, so /audits/verify-integrity recomputes the
-    # identical hashes and reports the chain as intact.
     from app.services.audit_service import compute_record_hash, GENESIS_HASH
     audit_records.sort(key=lambda r: (r.get("created_at"), str(r["_id"])))
     prev_hash = GENESIS_HASH

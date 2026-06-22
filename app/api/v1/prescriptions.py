@@ -102,6 +102,12 @@ async def create_prescription_endpoint(
     if checks:
         prescription = await get_prescription_by_id(db, prescription.id)
 
+    await log_action(
+        db, action="prescription_created", user_id=current_user.id, user_role=current_user.role,
+        user_name=getattr(current_user, "full_name", None), entity_type="prescription", entity_id=prescription.id,
+        detail=f"{prescription.rx_number or prescription.id}{' (flagged)' if checks else ''}",
+        ip_address=ip, user_agent=ua,
+    )
     return prescription
 
 

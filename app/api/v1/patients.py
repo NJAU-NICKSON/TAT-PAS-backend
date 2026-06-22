@@ -1,5 +1,6 @@
 from typing import Optional, List
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from app.services.activity_service import log_action
 from pydantic import BaseModel
 from pymongo.asynchronous.database import AsyncDatabase
 
@@ -136,6 +137,7 @@ async def get_patient(
 # Register a new patient.
 @router.post("", response_model=PatientResponse, status_code=status.HTTP_201_CREATED)
 async def create_new_patient(
+    request: Request,
     body: PatientCreate,
     force: bool = Query(False, description="Register even if a possible duplicate exists"),
     current_user=Depends(require_roles(Roles.receptionist, Roles.admin, Roles.nurse)),
@@ -148,9 +150,16 @@ async def create_new_patient(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="MRN already exists",
             )
-    return await patient_service.create_patient(
+    patient = await patient_service.create_patient(
         db, body, registered_by=current_user.id, force=force
     )
+    await log_action(
+        db, action="patient_registered", user_id=current_user.id, user_role=current_user.role,
+        user_name=getattr(current_user, "full_name", None), entity_type="patient", entity_id=str(getattr(patient, "id", "")),
+        detail=f"{getattr(patient, 'first_name', '')} {getattr(patient, 'last_name', '')}".strip(),
+        ip_address=request.client.host if request.client else None,
+    )
+    return patient
 
 
 # Update a patient's details.

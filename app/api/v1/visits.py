@@ -7,6 +7,8 @@ from app.models.visit import VisitCreate, VisitResponse, VisitUpdate, VisitStatu
 from app.models.user import UserInDB
 from app.security.rbac import get_current_user
 from app.services import visit_service
+from app.services.activity_service import log_action
+from fastapi import Request
 
 
 router = APIRouter(prefix="/visits", tags=["visits"])
@@ -15,6 +17,7 @@ router = APIRouter(prefix="/visits", tags=["visits"])
 # Register a new visit.
 @router.post("", response_model=VisitResponse)
 async def create_visit(
+    request: Request,
     data: VisitCreate,
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
@@ -23,6 +26,12 @@ async def create_visit(
         raise HTTPException(status_code=403, detail="Not authorized to create visits")
 
     visit = await visit_service.create_visit(data, current_user.id, db)
+    await log_action(
+        db, action="visit_registered", user_id=current_user.id, user_role=current_user.role,
+        user_name=current_user.full_name, entity_type="visit", entity_id=str(visit.id),
+        detail=f"{visit.visit_number} for {visit.patient_name or visit.patient_id}",
+        ip_address=request.client.host if request.client else None,
+    )
     return visit
 
 
@@ -108,6 +117,7 @@ async def get_consultation_note(
 # Record triage vitals and (optionally) confirm the doctor. Nurse only.
 @router.post("/{visit_id}/triage", response_model=VisitResponse)
 async def triage_visit(
+    request: Request,
     visit_id: str,
     data: TriageSubmit,
     current_user: UserInDB = Depends(get_current_user),
@@ -118,6 +128,12 @@ async def triage_visit(
     visit = await visit_service.triage_visit(visit_id, data, current_user.id, db)
     if not visit:
         raise HTTPException(status_code=404, detail="Visit not found")
+    await log_action(
+        db, action="triage_recorded", user_id=current_user.id, user_role=current_user.role,
+        user_name=current_user.full_name, entity_type="visit", entity_id=visit_id,
+        detail=f"Triage for {visit.visit_number}",
+        ip_address=request.client.host if request.client else None,
+    )
     return visit
 
 
@@ -140,6 +156,7 @@ async def admit_patient(
 # Discharge patient and release their bed back to cleaning.
 @router.post("/{visit_id}/discharge", response_model=VisitResponse)
 async def discharge_patient(
+    request: Request,
     visit_id: str,
     current_user: UserInDB = Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database)
@@ -152,6 +169,12 @@ async def discharge_patient(
         raise HTTPException(status_code=400, detail=str(exc))
     if visit is None:
         raise HTTPException(status_code=404, detail="Visit not found")
+    await log_action(
+        db, action="patient_discharged", user_id=current_user.id, user_role=current_user.role,
+        user_name=current_user.full_name, entity_type="visit", entity_id=visit_id,
+        detail=f"Discharged {visit.visit_number}",
+        ip_address=request.client.host if request.client else None,
+    )
     return visit
 
 
