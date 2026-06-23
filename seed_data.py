@@ -68,35 +68,66 @@ _SCENARIO_PEOPLE = [
     ("Nancy", "Chepkoech Ruto", "1996-03-17", "female", "B-", 59, [], []),
 ]
 
-# Each doctor's five patients, in order.
-_SCENARIO_ROLES = ["tat_flag", "rx_flag", "awaiting_pharmacy", "awaiting_nurse", "discharged"]
+# Per-patient outcome profile, one per patient in _SCENARIO_PEOPLE order.
+_PROFILES = [
+    {"outcome": "discharged", "flag": "none",    "acuity": "normal",
+     "complaint": "Lower abdominal pain", "diagnosis": "Acute gastroenteritis",
+     "meds": [("Metronidazole", "400mg", "oral", "TDS", 5)]},
+    {"outcome": "discharged", "flag": "on_time", "acuity": "normal",
+     "complaint": "Persistent cough and fever", "diagnosis": "Acute pharyngitis",
+     "meds": [("Amoxicillin", "500mg", "oral", "TDS", 7)]},
+    {"outcome": "discharged", "flag": "amended", "acuity": "urgent",
+     "complaint": "High fever and irritability", "diagnosis": "Febrile illness",
+     "meds": [("Ibuprofen", "400mg", "oral", "TDS", 5)]},
+    {"outcome": "ward",       "flag": "late",    "acuity": "urgent",
+     "complaint": "Wheezing and shortness of breath", "diagnosis": "Acute exacerbation of asthma",
+     "meds": [("Ceftriaxone", "1g", "iv", "OD", 5)]},
+    {"outcome": "discharged", "flag": "none",    "acuity": "normal",
+     "complaint": "Headache and body aches", "diagnosis": "Viral illness",
+     "meds": [("Paracetamol", "1g", "oral", "QDS", 3)]},
 
-_SCENARIO_COMPLAINTS = {
-    "tat_flag":          "Severe headache and high blood pressure",
-    "rx_flag":           "High fever and irritability",
-    "awaiting_pharmacy": "Persistent cough and fever",
-    "awaiting_nurse":    "Wheezing and shortness of breath",
-    "discharged":        "Lower abdominal pain",
-}
-_SCENARIO_DIAGNOSES = {
-    "tat_flag":          "Hypertensive urgency",
-    "rx_flag":           "Febrile illness",
-    "awaiting_pharmacy": "Acute pharyngitis",
-    "awaiting_nurse":    "Acute exacerbation of asthma",
-    "discharged":        "Acute gastroenteritis",
-}
-_SCENARIO_MEDS = {
-    "tat_flag":          [("Amoxicillin", "500mg", "oral", "TDS", 7)],
-    "rx_flag":           [("Ibuprofen", "400mg", "oral", "TDS", 5)],
-    "awaiting_pharmacy": [("Amoxicillin", "500mg", "oral", "TDS", 7)],
-    "awaiting_nurse":    [("Ceftriaxone", "1g", "iv", "OD", 5)],
-    "discharged":        [("Metformin", "500mg", "oral", "BD", 30)],
-}
+    {"outcome": "discharged", "flag": "on_time", "acuity": "normal",
+     "complaint": "Burning on urination", "diagnosis": "Urinary tract infection",
+     "meds": [("Nitrofurantoin", "100mg", "oral", "BD", 5)]},
+    {"outcome": "discharged", "flag": "none",    "acuity": "normal",
+     "complaint": "Sore throat", "diagnosis": "Tonsillitis",
+     "meds": [("Amoxicillin", "500mg", "oral", "TDS", 7)]},
+    {"outcome": "ward",       "flag": "amended", "acuity": "urgent",
+     "complaint": "High fever and irritability", "diagnosis": "Febrile illness",
+     "meds": [("Ibuprofen", "200mg", "oral", "TDS", 5)]},
+    {"outcome": "discharged", "flag": "late",    "acuity": "urgent",
+     "complaint": "Shortness of breath", "diagnosis": "COPD exacerbation",
+     "meds": [("Prednisolone", "30mg", "oral", "OD", 5)]},
+    {"outcome": "discharged", "flag": "none",    "acuity": "normal",
+     "complaint": "Skin rash", "diagnosis": "Allergic dermatitis",
+     "meds": [("Cetirizine", "10mg", "oral", "OD", 7)]},
+
+    {"outcome": "discharged", "flag": "on_time", "acuity": "normal",
+     "complaint": "Severe headache and high blood pressure", "diagnosis": "Hypertensive urgency",
+     "meds": [("Amlodipine", "10mg", "oral", "OD", 30)]},
+    {"outcome": "discharged", "flag": "none",    "acuity": "normal",
+     "complaint": "Diarrhoea and vomiting", "diagnosis": "Acute gastroenteritis",
+     "meds": [("Oral Rehydration Salts", "1 sachet", "oral", "PRN", 3)]},
+    {"outcome": "ward",       "flag": "on_time", "acuity": "urgent",
+     "complaint": "Severe abdominal pain", "diagnosis": "Acute appendicitis",
+     "meds": [("Ceftriaxone", "1g", "iv", "OD", 5)]},
+    {"outcome": "discharged", "flag": "none",    "acuity": "normal",
+     "complaint": "Routine diabetic review", "diagnosis": "Type 2 diabetes mellitus",
+     "meds": [("Metformin", "500mg", "oral", "BD", 30)]},
+    {"outcome": "ward",       "flag": "late",    "acuity": "critical",
+     "complaint": "Chest pain and breathlessness", "diagnosis": "Community-acquired pneumonia",
+     "meds": [("Ceftriaxone", "2g", "iv", "OD", 7)]},
+]
+
+# Friendly text used when the dose check flags Ibuprofen for a child.
+_AMEND_ISSUE = ("Dose exceeds weight-based limit: 120.0 mg/kg/day for Ibuprofen "
+                "(age band 1-12, max 30 mg/kg/day)")
+_AMEND_REC = ("Accepted range for a child this age is up to 30 mg/kg/day "
+              "(abs 800 mg/day). Recalculate for the patient's weight.")
 
 
 def _monday_of_this_week():
-    # Anchor the simulated week to the most recent Monday that keeps every
-    # working day (Mon-Fri) in the past, so turnaround times are never negative.
+    # Most recent Monday whose week is fully in the past (avoids negative TAT).
     midnight = datetime(NOW.year, NOW.month, NOW.day)
     this_monday = midnight - timedelta(days=midnight.weekday())
     # If Friday of this week is still in the future, use last week instead.
@@ -111,6 +142,7 @@ def build_scenario(dept_map, user_ids):
     reception = user_ids["receptionist"]
     auditor = user_ids["auditor"]
     pharmacist = user_ids["pharmacist"]
+    billing = user_ids.get("billing", reception)
 
     monday = _monday_of_this_week()
 
@@ -119,19 +151,29 @@ def build_scenario(dept_map, user_ids):
     def minutes(a, b):
         return round((b - a).total_seconds() / 60.0, 1)
 
-    patients, visits, prescriptions, audit_records, bills = [], [], [], [], []
+    patients, visits, prescriptions, audit_records, bills, activity_log = [], [], [], [], [], []
     mrn_counters, visit_counters = {}, {}
     rx_n = bill_n = 1
+
+    # Spread the visits across the two-week window without going past today.
+    span_days = (NOW - monday).days
+    day_offsets = []
+    for i in range(len(_SCENARIO_PEOPLE)):
+        off = i % (span_days + 1) if span_days >= 0 else 0
+        day_offsets.append(off)
 
     for i, person in enumerate(_SCENARIO_PEOPLE):
         first, last, dob, gender, blood, weight, allergy_codes, chronic = person
         doctor_idx = i // 5
-        role = _SCENARIO_ROLES[i % 5]
+        profile = _PROFILES[i]
         doctor_id = sid(doctors[doctor_idx])
         nurse_id = sid(nurses[doctor_idx])
 
-        reg_day = monday + timedelta(days=(i % 5))
+        reg_day = monday + timedelta(days=day_offsets[i])
         reg_at = reg_day + timedelta(hours=8 + (i % 6), minutes=(i * 7) % 60)
+        # Safety: never allow a registration time in the future.
+        if reg_at > NOW - timedelta(hours=5):
+            reg_at = NOW - timedelta(days=1 + (i % 3), hours=(i % 6), minutes=(i * 7) % 60)
         day_key = reg_at.strftime("%Y%m%d")
 
         mrn_counters[day_key] = mrn_counters.get(day_key, 0) + 1
@@ -177,20 +219,36 @@ def build_scenario(dept_map, user_ids):
             prec["is_neonate"] = age < 1
         patients.append(prec)
 
-        acuity = "critical" if role == "tat_flag" else ("urgent" if role == "awaiting_nurse" else "normal")
+        outcome = profile["outcome"]
+        flagkind = profile["flag"]
+        acuity = profile["acuity"]
         dept_code = "ED" if acuity == "critical" else "OPD"
-        vstatus = {
-            "tat_flag":          "waiting_for_doctor",
-            "rx_flag":           "waiting_for_doctor",
-            "awaiting_pharmacy": "treatment_in_progress",
-            "awaiting_nurse":    "treatment_in_progress",
-            "discharged":        "discharged",
-        }[role]
+        priority = {"normal": "routine", "urgent": "urgent", "critical": "stat"}[acuity]
+        sla = SLA_BY_PRIORITY.get(priority, 60)
 
+        def log(action, role_name, actor_id, when, entity_type, entity_id, detail):
+            activity_log.append({
+                "_id": oid(),
+                "action": action,
+                "user_id": actor_id,
+                "user_role": role_name,
+                "user_name": name_by_id.get(actor_id, role_name.title()),
+                "entity_type": entity_type,
+                "entity_id": entity_id,
+                "detail": detail,
+                "ip_address": "10.0.0.20",
+                "user_agent": "seed",
+                "created_at": when,
+            })
+
+        # Journey timeline.
         vid = oid()
         triaged_at = reg_at + timedelta(minutes=12)
         consult_started = triaged_at + timedelta(minutes=20)
         consult_ended = consult_started + timedelta(minutes=18)
+
+        # Final visit status depends on the outcome.
+        vstatus = "discharged" if outcome == "discharged" else "in_ward"
 
         vrec = {
             "_id": vid,
@@ -203,7 +261,8 @@ def build_scenario(dept_map, user_ids):
             "registered_at": reg_at,
             "registered_by_id": sid(reception),
             "registered_by_name": name_by_id.get(sid(reception)),
-            "chief_complaint": _SCENARIO_COMPLAINTS[role],
+            "chief_complaint": profile["complaint"],
+            "diagnosis": profile["diagnosis"],
             "assigned_doctor_id": doctor_id,
             "assigned_doctor_name": name_by_id.get(doctor_id),
             "doctor_assigned_at": reg_at,
@@ -220,158 +279,199 @@ def build_scenario(dept_map, user_ids):
             "created_at": reg_at,
             "updated_at": reg_at,
         }
-        if role == "discharged":
-            vrec["diagnosis"] = _SCENARIO_DIAGNOSES[role]
-            vrec["billing_completed_at"] = consult_ended + timedelta(hours=2)
-            vrec["discharged_at"] = consult_ended + timedelta(hours=3)
-        elif role in ("awaiting_pharmacy", "awaiting_nurse"):
-            vrec["diagnosis"] = _SCENARIO_DIAGNOSES[role]
-        visits.append(vrec)
+        log("patient_registered", "receptionist", sid(reception), reg_at, "visit", sid(vid),
+            f"Registered {first} {last} ({mrn}), visit {visit_number}")
+        log("triage_recorded", "nurse", nurse_id, triaged_at, "visit", sid(vid),
+            f"Triage vitals recorded; assigned to {name_by_id.get(doctor_id)}")
+        log("consultation_completed", "doctor", doctor_id, consult_ended, "visit", sid(vid),
+            f"Consultation completed; diagnosis: {profile['diagnosis']}")
 
-        priority = "stat" if acuity == "critical" else ("urgent" if acuity == "urgent" else "routine")
-        sla = SLA_BY_PRIORITY.get(priority, 60)
+        # Prescription, advanced through the full workflow.
         meds = [{"name": m[0], "dose": m[1], "route": m[2], "frequency": m[3], "duration_days": m[4]}
-                for m in _SCENARIO_MEDS[role]]
+                for m in profile["meds"]]
         ordered_at = consult_ended
-        rx_status = {
-            "tat_flag":          "submitted",
-            "rx_flag":           "flagged",
-            "awaiting_pharmacy": "verified",
-            "awaiting_nurse":    "dispensed",
-            "discharged":        "administered",
-        }[role]
-        flags = ["high_dose"] if role == "rx_flag" else []
-
         rxid = oid()
+        rx_number = f"RX-2026-{rx_n:04d}"
         rx = {
             "_id": rxid,
-            "rx_number": f"RX-2026-{rx_n:04d}",
+            "rx_number": rx_number,
             "patient_id": sid(pid),
             "doctor_id": doctor_id,
             "visit_id": sid(vid),
             "department_id": sid(dept_map[dept_code]),
             "medications": meds,
-            "status": rx_status,
+            "status": "administered",          
             "order_source": vrec["visit_type"],
             "priority": priority,
-            "flags": flags,
+            "flags": [],
             "sla_threshold_min": sla,
             "sla_breached": False,
-            "notes": f"Prescribed for: {vrec['chief_complaint']}",
+            "notes": f"Prescribed for: {profile['complaint']}",
             "ordered_at": ordered_at,
             "created_at": ordered_at,
             "updated_at": ordered_at,
         }
         rx_n += 1
+        log("prescription_created", "doctor", doctor_id, ordered_at, "prescription", sid(rxid),
+            f"{rx_number} ordered: " + ", ".join(m["name"] for m in meds))
 
         submitted_at = ordered_at + timedelta(minutes=6)
         rx["submitted_at"] = submitted_at
         rx["tat_order_to_submit_min"] = minutes(ordered_at, submitted_at)
+        log("prescription_submitted", "doctor", doctor_id, submitted_at, "prescription", sid(rxid),
+            f"{rx_number} submitted for audit review")
 
-        if role == "tat_flag":
-            over = sla + 90
-            rx["sla_breached"] = True
-            rx["sla_breach_duration_min"] = float(over - sla)
-            rx["tat_breached_at"] = submitted_at + timedelta(minutes=sla)
-        elif role == "rx_flag":
-            rx["pharmacist_comment"] = "Flagged for clinical review - verify before dispensing."
+        # Flag and resolution. verify_at is set after any flag hold.
+        if flagkind == "none":
+            verify_at = submitted_at + timedelta(minutes=12)
+        else:
+            flag_at = submitted_at + timedelta(minutes=1)
+            is_amend = flagkind == "amended"
+            issue = _AMEND_ISSUE if is_amend else (
+                f"{priority.upper()} prescription approaching its {sla}-min SLA threshold")
+            rec = _AMEND_REC if is_amend else "Expedite review to stay within the SLA target."
+            # Hold time before the auditor acts.
+            hold = {"on_time": 9, "late": sla + 30, "amended": 16}[flagkind]
+            resolved_at = flag_at + timedelta(minutes=hold)
+            res_type = {"on_time": "false_positive", "late": "accepted_risk",
+                        "amended": "dose_adjusted"}[flagkind]
+            res_note = {
+                "on_time": "Reviewed against the catalogue; within acceptable range. No change required.",
+                "late": "Reviewed and accepted after confirming the clinical indication with the doctor.",
+                "amended": "Returned to the prescriber; dose recalculated for the patient's weight.",
+            }[flagkind]
 
-        if role in ("awaiting_pharmacy", "awaiting_nurse", "discharged"):
-            verify_at = submitted_at + timedelta(minutes=18)
-            rx["verified_at"] = verify_at
-            rx["auditor_approved_at"] = verify_at
-            rx["auditor_id"] = sid(auditor)
-            rx["tat_submit_to_verify_min"] = minutes(submitted_at, verify_at)
+            audit_records.append({
+                "_id": oid(),
+                "prescription_id": sid(rxid),
+                "visit_id": sid(vid),
+                "patient_id": sid(pid),
+                "flag_code": "high_dose" if is_amend else "sla_warning",
+                "type": "automated" if is_amend else "sla_breach",
+                "issue": issue,
+                "severity": "high" if is_amend else "medium",
+                "resolved": True,
+                "resolved_by": sid(auditor),
+                "resolved_at": resolved_at,
+                "resolution_type": res_type,
+                "resolution_note": res_note,
+                "created_by": "system",
+                "created_by_role": "system",
+                "created_at": flag_at,
+                "recommendation": rec,
+                "drug_name": meds[0]["name"],
+                "dose": meds[0]["dose"],
+                "countersigned": False,
+            })
+            log("flag_raised", "system", "system", flag_at, "prescription", sid(rxid),
+                f"{rx_number}: {issue}")
 
-        if role in ("awaiting_nurse", "discharged"):
-            disp_at = rx["verified_at"] + timedelta(minutes=14)
-            rx["dispensed_at"] = disp_at
-            rx["dispensed_by_id"] = sid(pharmacist)
-            rx["dispensed_by_name"] = name_by_id.get(sid(pharmacist))
-            rx["receipt_number"] = f"RCP-{day_key}-{rx_n:04d}"
-            rx["tat_verify_to_dispense_min"] = minutes(rx["verified_at"], disp_at)
+            if is_amend:
+                # Doctor amendment loop: returned -> amended -> resubmitted.
+                returned_at = flag_at + timedelta(minutes=4)
+                amended_at = returned_at + timedelta(minutes=6)
+                resubmitted_at = amended_at + timedelta(minutes=3)
+                log("prescription_returned", "auditor", sid(auditor), returned_at, "prescription", sid(rxid),
+                    f"{rx_number} returned to prescriber for amendment")
+                log("prescription_amended", "doctor", doctor_id, amended_at, "prescription", sid(rxid),
+                    f"{rx_number} amended: dose adjusted for patient weight")
+                log("prescription_resubmitted", "doctor", doctor_id, resubmitted_at, "prescription", sid(rxid),
+                    f"{rx_number} resubmitted after amendment")
+                rx["amended_at"] = amended_at
+                rx["amendment_note"] = "Dose adjusted for patient weight following audit flag."
+                verify_at = max(resolved_at, resubmitted_at) + timedelta(minutes=2)
+            else:
+                verify_at = resolved_at + timedelta(minutes=2)
+                if flagkind == "late":
+                    rx["sla_breached"] = True
+                    rx["sla_breach_duration_min"] = float(hold - sla)
+                    rx["tat_breached_at"] = flag_at + timedelta(minutes=sla)
 
-        if role == "discharged":
-            admin_at = rx["dispensed_at"] + timedelta(minutes=22)
-            rx["administered_at"] = admin_at
-            rx["administered_by_id"] = nurse_id
-            rx["administered_by_name"] = name_by_id.get(nurse_id)
-            rx["administered_dose"] = meds[0]["dose"]
-            rx["administered_route"] = meds[0]["route"]
-            rx["tat_dispense_to_admin_min"] = minutes(rx["dispensed_at"], admin_at)
-            rx["tat_total_min"] = minutes(ordered_at, admin_at)
+            log("flag_resolved", "auditor", sid(auditor), resolved_at, "prescription", sid(rxid),
+                f"{rx_number} flag resolved ({res_type})")
+
+        # Verify, dispense, administer.
+        rx["verified_at"] = verify_at
+        rx["auditor_approved_at"] = verify_at
+        rx["auditor_id"] = sid(auditor)
+        rx["tat_submit_to_verify_min"] = minutes(submitted_at, verify_at)
+        log("prescription_verified", "auditor", sid(auditor), verify_at, "prescription", sid(rxid),
+            f"{rx_number} verified and approved for pharmacy")
+
+        disp_at = verify_at + timedelta(minutes=14)
+        rx["dispensed_at"] = disp_at
+        rx["dispensed_by_id"] = sid(pharmacist)
+        rx["dispensed_by_name"] = name_by_id.get(sid(pharmacist))
+        rx["receipt_number"] = f"RCP-{day_key}-{rx_n:04d}"
+        rx["tat_verify_to_dispense_min"] = minutes(verify_at, disp_at)
+        log("prescription_dispensed", "pharmacist", sid(pharmacist), disp_at, "prescription", sid(rxid),
+            f"{rx_number} dispensed")
+
+        admin_at = disp_at + timedelta(minutes=22)
+        rx["administered_at"] = admin_at
+        rx["administered_by_id"] = nurse_id
+        rx["administered_by_name"] = name_by_id.get(nurse_id)
+        rx["administered_dose"] = meds[0]["dose"]
+        rx["administered_route"] = meds[0]["route"]
+        rx["tat_dispense_to_admin_min"] = minutes(disp_at, admin_at)
+        rx["tat_total_min"] = minutes(ordered_at, admin_at)
+        log("prescription_administered", "nurse", nurse_id, admin_at, "prescription", sid(rxid),
+            f"{rx_number} administered to patient")
 
         prescriptions.append(rx)
         vrec["prescription_ids"] = [sid(rxid)]
 
-        # Unresolved flags awaiting auditor review.
-        if role == "rx_flag":
-            audit_records.append({
-                "_id": oid(),
-                "prescription_id": sid(rxid),
-                "visit_id": sid(vid),
-                "patient_id": sid(pid),
-                "flag_code": "high_dose",
-                "type": "automated",
-                "issue": ("Dose exceeds weight-based limit: 120.0 mg/kg/day for Ibuprofen "
-                          "(age band 1-12, max 30 mg/kg/day)"),
-                "severity": "high",
-                "resolved": False,
-                "created_by": "system",
-                "created_by_role": "system",
-                "created_at": submitted_at + timedelta(minutes=1),
-                "recommendation": ("Accepted range for a child this age is up to 30 mg/kg/day "
-                                   "(abs 800 mg/day). Recalculate for the patient's weight."),
-                "drug_name": "Ibuprofen",
-                "dose": "400mg",
-                "countersigned": False,
-            })
-        if role == "tat_flag":
-            audit_records.append({
-                "_id": oid(),
-                "prescription_id": sid(rxid),
-                "visit_id": sid(vid),
-                "patient_id": sid(pid),
-                "flag_code": "sla_exceeded",
-                "type": "sla_breach",
-                "issue": f"{priority.upper()} prescription exceeded its {sla}-min SLA",
-                "severity": "high",
-                "resolved": False,
-                "created_by": "system",
-                "created_by_role": "system",
-                "created_at": rx["tat_breached_at"],
-                "countersigned": False,
-            })
+        # Bill: paid for discharged patients, unpaid for those on the ward.
+        med_desc = f"{meds[0]['name']} {meds[0]['dose']}"
+        line_items = [
+            {"category": "consultation", "description": "OPD Consultation",
+             "quantity": 1, "unit_price": 800.0, "total_price": 800.0},
+            {"category": "pharmacy", "description": med_desc,
+             "quantity": 1, "unit_price": 900.0, "total_price": 900.0},
+            {"category": "lab", "description": "Laboratory tests",
+             "quantity": 1, "unit_price": 400.0, "total_price": 400.0},
+        ]
+        if outcome == "ward":
+            line_items.append({"category": "ward", "description": "Inpatient bed (per day)",
+                               "quantity": 1, "unit_price": 2500.0, "total_price": 2500.0})
+        subtotal = sum(li["total_price"] for li in line_items)
+        bill_created = admin_at + timedelta(minutes=20)
+        bill = {
+            "_id": oid(),
+            "bill_number": f"BILL-2026-{bill_n:04d}",
+            "visit_id": sid(vid),
+            "visit_number": visit_number,
+            "patient_id": sid(pid),
+            "line_items": line_items,
+            "subtotal": float(subtotal),
+            "discount_amount": 0.0,
+            "tax_amount": 0.0,
+            "total_amount": float(subtotal),
+            "created_at": bill_created,
+        }
+        if outcome == "discharged":
+            
+            # Settled in full, then discharged.
+            paid_at = bill_created + timedelta(minutes=25)
+            bill["status"] = "paid"
+            bill["payments"] = [{"amount": float(subtotal), "method": "mpesa", "received_at": paid_at}]
+            vrec["billing_completed_at"] = paid_at
+            vrec["discharged_at"] = paid_at + timedelta(minutes=15)
+            vrec["status"] = "discharged"
+            log("payment_received", "billing", sid(billing), paid_at, "bill", sid(bill["_id"]),
+                f"{bill['bill_number']} paid in full (KES {subtotal:,.0f})")
+            log("patient_discharged", "nurse", nurse_id, vrec["discharged_at"], "visit", sid(vid),
+                f"{first} {last} discharged")
+        else:
+            # On the ward: bill raised but not yet settled.
+            bill["status"] = "finalized"
+            bill["payments"] = []
+            log("bill_finalized", "billing", sid(billing), bill_created, "bill", sid(bill["_id"]),
+                f"{bill['bill_number']} finalized (KES {subtotal:,.0f}); payment pending at discharge")
+        bills.append(bill)
+        bill_n += 1
 
-        # Discharged patient: partially paid bill.
-        if role == "discharged":
-            line_items = [
-                {"category": "consultation", "description": "OPD Consultation",
-                 "quantity": 1, "unit_price": 800.0, "total_price": 800.0},
-                {"category": "pharmacy", "description": "Metformin 500mg x60",
-                 "quantity": 1, "unit_price": 900.0, "total_price": 900.0},
-                {"category": "lab", "description": "Blood Glucose",
-                 "quantity": 1, "unit_price": 400.0, "total_price": 400.0},
-            ]
-            subtotal = sum(li["total_price"] for li in line_items)
-            created_at = consult_ended + timedelta(minutes=40)
-            bills.append({
-                "_id": oid(),
-                "bill_number": f"BILL-2026-{bill_n:04d}",
-                "visit_id": sid(vid),
-                "visit_number": visit_number,
-                "patient_id": sid(pid),
-                "status": "partially_paid",
-                "line_items": line_items,
-                "subtotal": float(subtotal),
-                "discount_amount": 0.0,
-                "tax_amount": 0.0,
-                "total_amount": float(subtotal),
-                "payments": [{"amount": round(subtotal * 0.5, 2), "method": "mpesa",
-                              "received_at": created_at + timedelta(minutes=20)}],
-                "created_at": created_at,
-            })
-            bill_n += 1
+        visits.append(vrec)
 
     # Seed per-day counters so live registrations continue the sequence.
     counters = []
@@ -380,8 +480,7 @@ def build_scenario(dept_map, user_ids):
     for day_key, seq in visit_counters.items():
         counters.append({"_id": f"visit_{day_key}", "seq": seq})
 
-    return patients, visits, prescriptions, audit_records, bills, counters
+    return patients, visits, prescriptions, audit_records, bills, activity_log, counters
 
 
-# Populated by the runner so the scenario builder can resolve staff names.
 _ALL_USERS_CACHE = []

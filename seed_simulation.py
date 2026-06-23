@@ -1,10 +1,4 @@
-"""
-seed_simulation.py
-Standalone simulation data seeder for the hospital TAT and Prescription Audit system.
-Usage:
-  python backend/seed_simulation.py           # seed if collections empty
-  python backend/seed_simulation.py --fresh   # drop all docs and re-seed
-"""
+
 
 import os
 import sys
@@ -196,7 +190,7 @@ def seed(fresh=False):
     db = client[MONGO_DB]
 
     collections = ["users","departments","beds","consultation_rooms","patients","visits",
-                   "prescriptions","audit_records","bills","counters"]
+                   "prescriptions","audit_records","bills","activity_log","counters"]
 
     if not fresh:
         non_empty = [c for c in collections if db[c].count_documents({}) > 0]
@@ -219,7 +213,7 @@ def seed(fresh=False):
     consultation_rooms         = build_consultation_rooms(dept_map, user_ids)
 
     seed_data._ALL_USERS_CACHE = users
-    patients, visits, prescriptions, audit_records, bills, counters = seed_data.build_scenario(dept_map, user_ids)
+    patients, visits, prescriptions, audit_records, bills, activity_log, counters = seed_data.build_scenario(dept_map, user_ids)
 
     from app.services.audit_service import compute_record_hash, GENESIS_HASH
     audit_records.sort(key=lambda r: (r.get("created_at"), str(r["_id"])))
@@ -240,6 +234,7 @@ def seed(fresh=False):
         ("prescriptions",  prescriptions),
         ("audit_records",  audit_records),
         ("bills",          bills),
+        ("activity_log",   activity_log),
         ("counters",       counters),
     ]:
         if docs:

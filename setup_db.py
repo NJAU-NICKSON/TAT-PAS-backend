@@ -1,15 +1,6 @@
 """
 TAT-PAS Database Setup Script
-==============================
-Creates all MongoDB collections with JSON Schema validation and indexes.
-Also seeds reference data (SLA config, drug safety rules).
 
-Usage:
-    python backend/setup_db.py
-
-Environment variables:
-    MONGO_URI   - MongoDB connection string  (default: mongodb://localhost:27017)
-    MONGO_DB    - Database name              (default: tatpas)
 """
 
 import os
@@ -563,27 +554,6 @@ COLLECTIONS = {
         ],
     },
 
-    "high_alert_drugs": {
-        "validator": {
-            "$jsonSchema": {
-                "bsonType": "object",
-                "required": ["name", "category", "risk_factors"],
-                "additionalProperties": True,
-                "properties": {
-                    "name":               {"bsonType": "string"},
-                    "category":           {"bsonType": "string"},
-                    "risk_factors":       {"bsonType": "array"},
-                    "special_monitoring": {"bsonType": ["string", "null"]},
-                },
-            }
-        },
-        "validationLevel": "strict",
-        "validationAction": "error",
-        "indexes": [
-            {"keys": [("name", ASCENDING)], "options": {"unique": True, "name": "high_alert_name_unique"}},
-        ],
-    },
-
     "daily_reports": {
         "validator": {
             "$jsonSchema": {
@@ -605,77 +575,34 @@ COLLECTIONS = {
     },
 }
 
-
 SEED_DATA = {
     "sla_config": [
-        {"priority": "stat",      "threshold_min": 15,  "description": "STAT orders must be processed within 15 minutes"},
-        {"priority": "urgent",    "threshold_min": 30,  "description": "Urgent orders must be processed within 30 minutes"},
-        {"priority": "routine",   "threshold_min": 60,  "description": "Routine orders must be processed within 60 minutes"},
-        {"priority": "discharge", "threshold_min": 45,  "description": "Discharge orders must be processed within 45 minutes"},
-        {"priority": "nicu",      "threshold_min": 20,  "description": "NICU orders must be processed within 20 minutes"},
-        {"priority": "chemo",     "threshold_min": 120, "description": "Chemotherapy orders must be processed within 120 minutes"},
+        {"priority": "stat",      "threshold_min": 15,  "description": "STAT orders within 15 minutes"},
+        {"priority": "urgent",    "threshold_min": 30,  "description": "Urgent orders within 30 minutes"},
+        {"priority": "routine",   "threshold_min": 60,  "description": "Routine orders within 60 minutes"},
+        {"priority": "discharge", "threshold_min": 45,  "description": "Discharge orders within 45 minutes"},
+        {"priority": "nicu",      "threshold_min": 20,  "description": "NICU orders within 20 minutes"},
+        {"priority": "chemo",     "threshold_min": 120, "description": "Chemotherapy orders within 120 minutes"},
     ],
     "drug_interactions": [
-        {"drug_a": "warfarin",        "drug_b": "aspirin",        "severity": "high",   "interaction": "Increased bleeding risk",              "recommendation": "Monitor INR closely"},
-        {"drug_a": "methotrexate",    "drug_b": "nsaids",         "severity": "high",   "interaction": "Increased methotrexate toxicity",      "recommendation": "Avoid combination or reduce dose"},
-        {"drug_a": "digoxin",         "drug_b": "furosemide",     "severity": "medium", "interaction": "Hypokalemia increases digoxin toxicity","recommendation": "Monitor potassium levels"},
-        {"drug_a": "lithium",         "drug_b": "nsaids",         "severity": "high",   "interaction": "Reduced lithium clearance",             "recommendation": "Monitor lithium levels"},
-        {"drug_a": "ace inhibitors",  "drug_b": "potassium",      "severity": "medium", "interaction": "Hyperkalemia risk",                     "recommendation": "Monitor potassium levels"},
-        {"drug_a": "ssri",            "drug_b": "tramadol",       "severity": "high",   "interaction": "Serotonin syndrome risk",               "recommendation": "Avoid combination"},
-        {"drug_a": "macrolide",       "drug_b": "statins",        "severity": "high",   "interaction": "Rhabdomyolysis risk",                   "recommendation": "Consider statin holiday"},
-        {"drug_a": "metronidazole",   "drug_b": "warfarin",       "severity": "high",   "interaction": "Increased anticoagulation",             "recommendation": "Monitor INR closely"},
-        {"drug_a": "phenytoin",       "drug_b": "valproate",      "severity": "medium", "interaction": "Altered phenytoin levels",              "recommendation": "Monitor phenytoin levels"},
-        {"drug_a": "rifampicin",      "drug_b": "contraceptives", "severity": "medium", "interaction": "Reduced contraceptive efficacy",        "recommendation": "Use additional contraception"},
-        {"drug_a": "ciprofloxacin",   "drug_b": "theophylline",   "severity": "medium", "interaction": "Increased theophylline levels",         "recommendation": "Monitor theophylline levels"},
-        {"drug_a": "amiodarone",      "drug_b": "warfarin",       "severity": "high",   "interaction": "Increased anticoagulation",             "recommendation": "Reduce warfarin dose by 30-50%"},
-        {"drug_a": "carbamazepine",   "drug_b": "contraceptives", "severity": "medium", "interaction": "Reduced contraceptive efficacy",        "recommendation": "Use additional contraception"},
-        {"drug_a": "azithromycin",    "drug_b": "simvastatin",    "severity": "high",   "interaction": "Rhabdomyolysis risk",                   "recommendation": "Consider statin holiday"},
-        {"drug_a": "clarithromycin",  "drug_b": "warfarin",       "severity": "high",   "interaction": "Increased anticoagulation",             "recommendation": "Monitor INR closely"},
-        {"drug_a": "fluconazole",     "drug_b": "warfarin",       "severity": "high",   "interaction": "Increased anticoagulation",             "recommendation": "Monitor INR closely"},
-        {"drug_a": "omeprazole",      "drug_b": "clopidogrel",    "severity": "medium", "interaction": "Reduced clopidogrel efficacy",          "recommendation": "Consider alternative PPI"},
-        {"drug_a": "verapamil",       "drug_b": "beta blockers",  "severity": "high",   "interaction": "Heart block risk",                     "recommendation": "Avoid combination"},
-        {"drug_a": "metformin",       "drug_b": "contrast media", "severity": "high",   "interaction": "Lactic acidosis risk",                 "recommendation": "Hold metformin 48h before/after contrast"},
-        {"drug_a": "aminoglycosides", "drug_b": "furosemide",     "severity": "medium", "interaction": "Increased ototoxicity",                "recommendation": "Monitor hearing and renal function"},
-        {"drug_a": "allopurinol",     "drug_b": "azathioprine",   "severity": "high",   "interaction": "Bone marrow suppression",              "recommendation": "Reduce azathioprine dose to 25%"},
-        {"drug_a": "sildenafil",      "drug_b": "nitrates",       "severity": "high",   "interaction": "Severe hypotension",                   "recommendation": "Absolute contraindication"},
-        {"drug_a": "ketoconazole",    "drug_b": "statins",        "severity": "high",   "interaction": "Rhabdomyolysis risk",                  "recommendation": "Avoid combination"},
-        {"drug_a": "levodopa",        "drug_b": "iron",           "severity": "medium", "interaction": "Reduced levodopa absorption",          "recommendation": "Separate administration by 2 hours"},
-        {"drug_a": "tetracyclines",   "drug_b": "calcium",        "severity": "medium", "interaction": "Reduced antibiotic absorption",        "recommendation": "Separate administration by 2 hours"},
+        {"drug_a": "warfarin",      "drug_b": "aspirin",  "severity": "high",   "interaction": "Increased bleeding risk",        "recommendation": "Monitor INR closely"},
+        {"drug_a": "methotrexate",  "drug_b": "nsaids",   "severity": "high",   "interaction": "Increased methotrexate toxicity","recommendation": "Avoid combination or reduce dose"},
+        {"drug_a": "ssri",          "drug_b": "tramadol", "severity": "high",   "interaction": "Serotonin syndrome risk",        "recommendation": "Avoid combination"},
+        {"drug_a": "metronidazole", "drug_b": "warfarin", "severity": "high",   "interaction": "Increased anticoagulation",      "recommendation": "Monitor INR closely"},
+        {"drug_a": "digoxin",       "drug_b": "furosemide","severity": "medium","interaction": "Hypokalemia raises digoxin toxicity","recommendation": "Monitor potassium levels"},
     ],
     "controlled_substances": [
-        {"name": "morphine",      "schedule": "II",  "requires_tracking": True, "description": "Opioid analgesic"},
-        {"name": "fentanyl",      "schedule": "II",  "requires_tracking": True, "description": "Opioid analgesic"},
-        {"name": "oxycodone",     "schedule": "II",  "requires_tracking": True, "description": "Opioid analgesic"},
-        {"name": "hydromorphone", "schedule": "II",  "requires_tracking": True, "description": "Opioid analgesic"},
-        {"name": "methadone",     "schedule": "II",  "requires_tracking": True, "description": "Opioid analgesic"},
-        {"name": "midazolam",     "schedule": "IV",  "requires_tracking": True, "description": "Benzodiazepine sedative"},
-        {"name": "lorazepam",     "schedule": "IV",  "requires_tracking": True, "description": "Benzodiazepine anxiolytic"},
-        {"name": "diazepam",      "schedule": "IV",  "requires_tracking": True, "description": "Benzodiazepine"},
-        {"name": "ketamine",      "schedule": "III", "requires_tracking": True, "description": "Dissociative anesthetic"},
-        {"name": "pethidine",     "schedule": "II",  "requires_tracking": True, "description": "Opioid analgesic"},
+        {"name": "morphine",  "schedule": "II", "requires_tracking": True, "description": "Opioid analgesic"},
+        {"name": "fentanyl",  "schedule": "II", "requires_tracking": True, "description": "Opioid analgesic"},
+        {"name": "pethidine", "schedule": "II", "requires_tracking": True, "description": "Opioid analgesic"},
+        {"name": "midazolam", "schedule": "IV", "requires_tracking": True, "description": "Benzodiazepine sedative"},
     ],
     "category_x_drugs": [
-        {"name": "isotretinoin", "risk_description": "Severe birth defects",                         "alternative": "Topical retinoids for mild acne"},
-        {"name": "warfarin",     "risk_description": "Fetal warfarin syndrome",                       "alternative": "Heparin or LMWH"},
-        {"name": "methotrexate", "risk_description": "Neural tube defects, skeletal abnormalities",   "alternative": "Discontinue before conception"},
-        {"name": "misoprostol",  "risk_description": "Uterine contractions, birth defects",           "alternative": "Avoid in pregnancy"},
-        {"name": "thalidomide",  "risk_description": "Severe limb abnormalities",                     "alternative": "Contraindicated in pregnancy"},
-        {"name": "finasteride",  "risk_description": "Abnormalities of male fetus genitalia",         "alternative": "Contraindicated in women of childbearing age"},
-        {"name": "statins",      "risk_description": "Skeletal malformations",                        "alternative": "Discontinue during pregnancy"},
-        {"name": "acitretin",    "risk_description": "Craniofacial, cardiac, thymic defects",         "alternative": "Contraindicated in pregnancy"},
-    ],
-    "high_alert_drugs": [
-        {"name": "insulin",                  "category": "Endocrine",     "risk_factors": ["Hypoglycemia", "Dosing errors"],                  "special_monitoring": "Blood glucose monitoring"},
-        {"name": "heparin",                  "category": "Anticoagulant", "risk_factors": ["Hemorrhage", "Thrombocytopenia"],                 "special_monitoring": "APTT, platelet count"},
-        {"name": "warfarin",                 "category": "Anticoagulant", "risk_factors": ["Hemorrhage", "Drug interactions"],               "special_monitoring": "INR monitoring"},
-        {"name": "potassium",                "category": "Electrolyte",   "risk_factors": ["Cardiac arrhythmias", "Rapid infusion"],         "special_monitoring": "ECG, serum potassium"},
-        {"name": "magnesium sulfate",        "category": "Electrolyte",   "risk_factors": ["Respiratory depression", "Cardiac arrest"],      "special_monitoring": "Respiratory rate, reflexes"},
-        {"name": "chemotherapy agents",      "category": "Oncology",      "risk_factors": ["Cytotoxicity", "Dosing errors"],                 "special_monitoring": "Blood counts, organ function"},
-        {"name": "opioids",                  "category": "Analgesic",     "risk_factors": ["Respiratory depression", "Sedation"],           "special_monitoring": "Respiratory rate, sedation score"},
-        {"name": "neuromuscular blockers",   "category": "Anesthetic",    "risk_factors": ["Paralysis without sedation", "Prolonged paralysis"], "special_monitoring": "Train-of-four monitoring"},
+        {"name": "isotretinoin", "risk_description": "Severe birth defects",                       "alternative": "Topical retinoids for mild acne"},
+        {"name": "warfarin",     "risk_description": "Fetal warfarin syndrome",                     "alternative": "Heparin or LMWH"},
+        {"name": "methotrexate", "risk_description": "Neural tube defects, skeletal abnormalities", "alternative": "Discontinue before conception"},
     ],
 }
-
 
 # Create a collection if it doesn't exist.
 def create_collection(db, name: str, spec: dict) -> None:
@@ -703,7 +630,6 @@ def create_indexes(db, name: str, indexes: list) -> None:
         except OperationFailure as exc:
             print(f"  [WARN]    index on {name} failed: {exc}")
 
-
 # Insert baseline reference data.
 def seed_reference_data(db) -> None:
     print("\n--- Reference Data ---")
@@ -713,7 +639,6 @@ def seed_reference_data(db) -> None:
             continue
         result = db[collection_name].insert_many(data)
         print(f"  [SEED]  {collection_name}: {len(result.inserted_ids)} documents")
-
 
 # Initialise collections, indexes, and reference data.
 def setup(db) -> None:
