@@ -427,7 +427,10 @@ PERMITTED_TRANSITIONS = {
         "flagged": ["auditor"],
     },
     "pending_amendment": {"submitted": ["doctor", "surgeon", "anaesthetist", "midwife"]},
-    "flagged": {"verified": ["auditor"]},
+    "flagged": {
+        "verified": ["auditor"],
+        "pending_amendment": ["auditor"],
+    },
     "verified": {"dispensed": ["pharmacist"]},
     "dispensed": {"administered": ["nurse"]},
 }

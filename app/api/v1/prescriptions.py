@@ -153,6 +153,20 @@ async def list_prescriptions(
             date_query["$lte"] = date_to
         query["ordered_at"] = date_query
 
+    # In their work queue a nurse only sees prescriptions for patients they are
+    # caring for, so they cannot administer to unrelated patients. When a
+    # specific patient_id is requested (viewing a chart) this scoping is skipped.
+    if role in nursing_role_values and not patient_id:
+        nurse_visit_cursor = db.visits.find(
+            {"$or": [
+                {"consultation_nurse_id": current_user.id},
+                {"triage_nurse_id": current_user.id},
+            ]},
+            {"_id": 1},
+        )
+        nurse_visit_ids = [str(v["_id"]) async for v in nurse_visit_cursor]
+        query["visit_id"] = {"$in": nurse_visit_ids}
+
     if role == Roles.pharmacist.value and not status_filter:
         query["status"] = {"$in": _PHARMACIST_VISIBLE}
     elif role == Roles.auditor.value and not status_filter:
@@ -166,6 +180,21 @@ async def list_prescriptions(
     return [_doc_to_prescription(doc) for doc in docs]
 
 
+# Read access to a single prescription. Clinical staff caring for a patient
+# must be able to view the medication record, so viewing is open to all
+# authenticated roles; per-role scoping of work queues happens in the list
+# endpoint, and the administer action is gated by the status state machine.
+async def _require_prescription_access(db, prescription_id, current_user):
+    prescription = await get_prescription_by_id(db, prescription_id)
+    if not prescription:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"code": "PRESCRIPTION_NOT_FOUND", "message": "Prescription not found.",
+                    "details": {"prescription_id": prescription_id}},
+        )
+    return prescription
+
+
 # Full chronological audit trail for a prescription.
 @router.get("/{prescription_id}/history")
 async def get_history(
@@ -173,6 +202,7 @@ async def get_history(
     current_user=Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database),
 ):
+    await _require_prescription_access(db, prescription_id, current_user)
     return await get_prescription_history(db, prescription_id)
 
 
@@ -183,17 +213,7 @@ async def get_prescription(
     current_user=Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database),
 ):
-    prescription = await get_prescription_by_id(db, prescription_id)
-    if not prescription:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail={
-                "code": "PRESCRIPTION_NOT_FOUND",
-                "message": "Prescription not found.",
-                "details": {"prescription_id": prescription_id},
-            },
-        )
-    return prescription
+    return await _require_prescription_access(db, prescription_id, current_user)
 
 
 # Dedicated status-change endpoint used by auditors, pharmacists, and nurses.

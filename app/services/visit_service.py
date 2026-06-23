@@ -52,11 +52,33 @@ async def _get_user_name(db: AsyncDatabase, user_id: str) -> Optional[str]:
     return udoc.get("full_name") or udoc.get("username")
 
 
+_ACTIVE_VISIT_STATUSES = [
+    "registered", "triaged", "waiting_for_doctor", "in_consultation",
+    "awaiting_results", "treatment_in_progress", "admitted", "in_ward",
+    "ready_for_discharge",
+]
+
+
 # Register a new visit for a patient.
 async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase) -> VisitInDB:
     now = datetime.now(timezone.utc)
+
+    # Block a second open visit for the same patient (prevents duplicates).
+    existing = await db.visits.find_one({
+        "patient_id": data.patient_id,
+        "status": {"$in": _ACTIVE_VISIT_STATUSES},
+    })
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"This patient already has an active visit ({existing.get('visit_number')}). Discharge or cancel it first.",
+        )
+
     visit_number = await generate_visit_number(db)
     registered_by_name = await _get_user_name(db, created_by_id)
+
+    assigned_doctor_id = getattr(data, "assigned_doctor_id", None)
+    assigned_doctor_name = await _get_user_name(db, assigned_doctor_id) if assigned_doctor_id else None
 
     doc = {
         "visit_number": visit_number,
@@ -68,8 +90,8 @@ async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase)
         "status": VisitStatus.registered.value,
         "registered_by_id": created_by_id,
         "registered_by_name": registered_by_name,
-        "assigned_doctor_id": None,
-        "assigned_doctor_name": None,
+        "assigned_doctor_id": assigned_doctor_id,
+        "assigned_doctor_name": assigned_doctor_name,
         "triage_nurse_id": None,
         "triage_nurse_name": None,
         "consultation_room": None,
@@ -79,7 +101,7 @@ async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase)
         "bed_label": None,
         "prescription_ids": [],
         "registered_at": now,
-        "doctor_assigned_at": None,
+        "doctor_assigned_at": now if assigned_doctor_id else None,
         "triaged_at": None,
         "consultation_started_at": None,
         "consultation_ended_at": None,
@@ -562,18 +584,20 @@ async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
             "name": "Registration",
             "role": "receptionist",
             "started_at": visit.registered_at,
-            "completed_at": visit.doctor_assigned_at or visit.triaged_at,
+            "completed_at": visit.triaged_at or visit.doctor_assigned_at,
             "target_min": 10,
-            "tat_min": diff_min(visit.registered_at, visit.doctor_assigned_at or visit.triaged_at),
+            "tat_min": diff_min(visit.registered_at, visit.triaged_at or visit.doctor_assigned_at),
         },
         {
+            # Triage completes the moment it is recorded; the wait for the
+            # doctor belongs to the next stage, not to triage being in progress.
             "stage": 2,
             "name": "Triage",
             "role": "nurse",
             "started_at": visit.triaged_at,
-            "completed_at": visit.consultation_started_at,
+            "completed_at": visit.triaged_at,
             "target_min": 15,
-            "tat_min": diff_min(visit.triaged_at, visit.consultation_started_at),
+            "tat_min": diff_min(visit.registered_at, visit.triaged_at),
         },
         {
             "stage": 3,

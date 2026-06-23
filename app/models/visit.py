@@ -54,7 +54,7 @@ class VisitBase(BaseModel):
 
 # Fields for registering a visit.
 class VisitCreate(VisitBase):
-    pass
+    assigned_doctor_id: Optional[str] = None
 
 
 # Triage submission payload.

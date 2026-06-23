@@ -196,7 +196,7 @@ def seed(fresh=False):
     db = client[MONGO_DB]
 
     collections = ["users","departments","beds","consultation_rooms","patients","visits",
-                   "prescriptions","audit_records","bills"]
+                   "prescriptions","audit_records","bills","counters"]
 
     if not fresh:
         non_empty = [c for c in collections if db[c].count_documents({}) > 0]
@@ -212,36 +212,14 @@ def seed(fresh=False):
 
     import seed_data
 
+    # Staff first; the scenario builder needs their names for denormalised fields.
     users, user_ids            = build_users()
     departments, dept_map      = build_departments()
     beds, bed_ids              = build_beds(dept_map)
     consultation_rooms         = build_consultation_rooms(dept_map, user_ids)
-    patients, patient_ids      = seed_data.build_patients()
-    visits, visit_ids          = seed_data.build_visits(patient_ids, dept_map, user_ids, bed_ids)
-    prescriptions, rx_ids      = seed_data.build_prescriptions(patient_ids, visit_ids, visits, dept_map, user_ids)
-    audit_records              = seed_data.build_audit_records(rx_ids, prescriptions, user_ids)
-    bills                      = seed_data.build_bills(visit_ids, visits)
 
-    visit_rx_map = {}
-    for rx in prescriptions:
-        vid = rx.get("visit_id")
-        if vid:
-            visit_rx_map.setdefault(vid, []).append(rx["_id"])
-
-    for v in visits:
-        v_sid = sid(v["_id"])
-        if v_sid in visit_rx_map:
-            v["prescription_ids"] = [sid(r) for r in visit_rx_map[v_sid]]
-
-    occupied_bed_ids = {v["bed_id"] for v in visits
-                        if v.get("bed_id") and v["status"] in ("admitted", "in_ward", "ready_for_discharge")}
-    bed_patient = {v["bed_id"]: v["patient_id"] for v in visits
-                   if v.get("bed_id") and v["status"] in ("admitted", "in_ward", "ready_for_discharge")}
-    for b in beds:
-        bid = sid(b["_id"])
-        if bid in occupied_bed_ids:
-            b["status"] = "occupied"
-            b["current_patient_id"] = bed_patient.get(bid)
+    seed_data._ALL_USERS_CACHE = users
+    patients, visits, prescriptions, audit_records, bills, counters = seed_data.build_scenario(dept_map, user_ids)
 
     from app.services.audit_service import compute_record_hash, GENESIS_HASH
     audit_records.sort(key=lambda r: (r.get("created_at"), str(r["_id"])))
@@ -262,6 +240,7 @@ def seed(fresh=False):
         ("prescriptions",  prescriptions),
         ("audit_records",  audit_records),
         ("bills",          bills),
+        ("counters",       counters),
     ]:
         if docs:
             r = db[name].insert_many(docs)

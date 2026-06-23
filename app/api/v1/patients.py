@@ -16,13 +16,11 @@ from app.services import patient_service
 
 router = APIRouter(prefix="/patients", tags=["patients"])
 
-
 # Request body to add/remove a patient allergy.
 class AllergyRequest(BaseModel):
     substance: str
     reaction_type: Optional[str] = None
     severity: str = "moderate"
-
 
 # Search or list patients.
 @router.get("", response_model=PatientSearchResult)
@@ -46,8 +44,7 @@ async def list_patients(
         blood_group=blood_group,
     )
 
-
-# List all patients with paging.
+# Liwst all patients with paging.
 @router.get("/all", response_model=List[PatientResponse])
 async def get_all_patients(
     skip: int = Query(0, ge=0),

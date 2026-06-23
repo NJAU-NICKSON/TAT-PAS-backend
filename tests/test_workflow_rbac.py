@@ -6,7 +6,6 @@ from app.services.prescription_service import PERMITTED_TRANSITIONS
 def _roles(from_status, to_status):
     return PERMITTED_TRANSITIONS.get(from_status, {}).get(to_status, [])
 
-
 # Only the auditor verifies a submitted prescription (not pharmacist/doctor).
 def test_only_auditor_verifies():
     roles = _roles("submitted", "verified")

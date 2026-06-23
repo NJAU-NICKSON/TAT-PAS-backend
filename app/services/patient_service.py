@@ -149,7 +149,7 @@ async def search_patients(
 
     total = await db.patients.count_documents(filter_query)
 
-    cursor = db.patients.find(filter_query).sort([("last_name", 1), ("first_name", 1)]).skip(skip).limit(limit)
+    cursor = db.patients.find(filter_query).sort([("created_at", -1)]).skip(skip).limit(limit)
     docs = await cursor.to_list(length=limit)
 
     patients = [_doc_to_summary(doc) for doc in docs]
@@ -168,7 +168,7 @@ async def get_all_patients(
     skip: int = 0,
     limit: int = 50,
 ) -> List[PatientResponse]:
-    cursor = db.patients.find().sort([("last_name", 1), ("first_name", 1)]).skip(skip).limit(limit)
+    cursor = db.patients.find().sort([("created_at", -1)]).skip(skip).limit(limit)
     docs = await cursor.to_list(length=limit)
     return [_doc_to_response(doc) for doc in docs]
 

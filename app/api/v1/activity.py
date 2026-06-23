@@ -28,6 +28,79 @@ async def log_client_action(
     )
 
 
+# Pending notifications for the current user, derived from live data so they
+# appear even if the real-time WebSocket event was missed while offline.
+@router.get("/my-notifications")
+async def my_notifications(
+    current_user=Depends(get_current_user),
+    db: AsyncDatabase = Depends(get_database),
+):
+    out = []
+    role = current_user.role
+    uid = current_user.id
+
+    if role == "doctor":
+        # Patients assigned to me and still active.
+        async for v in db.visits.find(
+            {"assigned_doctor_id": uid, "status": {"$in": ["waiting_for_doctor", "in_consultation"]}}
+        ).sort("updated_at", -1).limit(20):
+            out.append({
+                "id": f"assign-{v['_id']}", "type": "patient_assigned",
+                "title": "Patient Assigned to You",
+                "subtitle": " - ".join(filter(None, [v.get("patient_name"), v.get("consultation_room"), v.get("visit_number")])) or "A patient was assigned to you",
+                "timestamp": (v.get("updated_at") or v.get("registered_at")),
+            })
+        # Prescriptions the auditor returned to me.
+        async for p in db.prescriptions.find(
+            {"doctor_id": uid, "status": "pending_amendment"}
+        ).sort("returned_at", -1).limit(20):
+            out.append({
+                "id": f"rx-pending_amendment-{p['_id']}", "type": "rx_returned",
+                "title": "Returned to Doctor",
+                "subtitle": " - ".join(filter(None, [f"Rx {p.get('rx_number')}" if p.get("rx_number") else None, p.get("return_reason"), "Amendment required"])),
+                "timestamp": (p.get("returned_at") or p.get("updated_at")),
+            })
+
+    if role == "nurse":
+        async for v in db.visits.find(
+            {"consultation_nurse_id": uid, "status": {"$in": ["waiting_for_doctor", "in_consultation", "triaged"]}}
+        ).sort("updated_at", -1).limit(20):
+            out.append({
+                "id": f"assign-{v['_id']}", "type": "patient_assigned",
+                "title": "Patient Assigned to You",
+                "subtitle": " - ".join(filter(None, [v.get("patient_name"), v.get("consultation_room"), v.get("visit_number")])) or "A patient was assigned to you",
+                "timestamp": (v.get("updated_at") or v.get("registered_at")),
+            })
+
+    if role in ("auditor", "admin"):
+        async for p in db.prescriptions.find(
+            {"status": {"$in": ["submitted", "flagged"]}}
+        ).sort("submitted_at", -1).limit(20):
+            out.append({
+                "id": f"rxnew-{p['_id']}", "type": "rx_created",
+                "title": "Prescription to Review",
+                "subtitle": " - ".join(filter(None, [f"Rx {p.get('rx_number')}" if p.get("rx_number") else None, p.get("patient_name"), p.get("priority")])),
+                "timestamp": (p.get("submitted_at") or p.get("created_at")),
+            })
+
+    if role == "pharmacist":
+        async for p in db.prescriptions.find(
+            {"status": "verified"}
+        ).sort("verified_at", -1).limit(20):
+            out.append({
+                "id": f"rx-verified-{p['_id']}", "type": "rx_verified",
+                "title": "Ready to Dispense",
+                "subtitle": " - ".join(filter(None, [f"Rx {p.get('rx_number')}" if p.get("rx_number") else None, p.get("patient_name")])),
+                "timestamp": (p.get("verified_at") or p.get("updated_at")),
+            })
+
+    out = [o for o in out if o.get("timestamp")]
+    out.sort(key=lambda o: o["timestamp"], reverse=True)
+    for o in out:
+        o["timestamp"] = o["timestamp"].isoformat()
+    return out[:40]
+
+
 # List user-action log entries. Admin and auditor only.
 @router.get("")
 async def get_activity(

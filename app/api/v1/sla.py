@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pymongo.asynchronous.database import AsyncDatabase
 from pydantic import BaseModel, Field
 from app.db.client import get_database
-from app.security.rbac import Roles, require_roles
+from app.security.rbac import Roles, require_roles, get_current_user
 from app.services.sla_service import (
     get_sla_config,
     update_sla_config,
@@ -79,10 +79,11 @@ async def update_config(
     return result
 
 
-# Return per-drug dose limits used by the prescription audit.
+# Return per-drug dose limits. Read-only reference data any clinical user can
+# see (doctors need it to dose correctly when amending a prescription).
 @router.get("/dose-limits")
 async def dose_limits(
-    current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
+    current_user=Depends(get_current_user),
     db: AsyncDatabase = Depends(get_database),
 ):
     return await get_dose_limits(db)
