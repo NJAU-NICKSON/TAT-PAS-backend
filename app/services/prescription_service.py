@@ -812,6 +812,8 @@ def run_automated_checks(prescription: dict) -> List[dict]:
                     "severity": "high",
                     "recommendation": "Verify dosage with prescribing physician before dispensing",
                     "flag_code": "high_dose",
+                    "drug_name": name,
+                    "dose": dose_str,
                 })
                 break
 
@@ -821,6 +823,8 @@ def run_automated_checks(prescription: dict) -> List[dict]:
                 "severity": "medium",
                 "recommendation": "Confirm extended duration is clinically appropriate",
                 "flag_code": "extended_duration",
+                "drug_name": name,
+                "dose": dose_str,
             })
 
     return issues

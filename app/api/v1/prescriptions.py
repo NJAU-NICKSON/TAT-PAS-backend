@@ -81,13 +81,28 @@ async def create_prescription_endpoint(
                         "severity": flag.severity.value if hasattr(flag.severity, "value") else str(flag.severity),
                         "recommendation": flag.recommendation,
                         "flag_code": flag.code,
+                        "drug_name": flag.drug_name,
+                        "dose": flag.dose,
                     })
                     existing_codes.add(flag.code)
 
     from app.models.patient import compute_age
     patient_age = compute_age((patient_doc or {}).get("dob")) if patient_doc else None
 
+    # Skip flag codes that already have an automated audit record for this
+    # prescription so re-running the safety checks never duplicates a flag.
+    already_flagged = set(
+        await db.audit_records.distinct(
+            "flag_code",
+            {"prescription_id": prescription.id, "type": "automated"},
+        )
+    )
+
     for check in checks:
+        flag_code = check.get("flag_code", "generic")
+        if flag_code in already_flagged:
+            continue
+        already_flagged.add(flag_code)
         await create_audit_record(
             db=db,
             prescription_id=prescription.id,
@@ -97,12 +112,14 @@ async def create_prescription_endpoint(
             issue=check["issue"],
             severity=check["severity"],
             recommendation=check["recommendation"],
-            flag_code=check.get("flag_code", "generic"),
+            flag_code=flag_code,
             patient_age=patient_age,
+            drug_name=check.get("drug_name"),
+            dose=check.get("dose"),
             ip_address=ip,
             user_agent=ua,
         )
-        await add_flag(db, prescription.id, check.get("flag_code", check["issue"]), ip_address=ip, user_agent=ua)
+        await add_flag(db, prescription.id, flag_code, ip_address=ip, user_agent=ua)
 
     if checks:
         prescription = await get_prescription_by_id(db, prescription.id)
