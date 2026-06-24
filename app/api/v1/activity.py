@@ -28,8 +28,7 @@ async def log_client_action(
     )
 
 
-# Pending notifications for the current user, derived from live data so they
-# appear even if the real-time WebSocket event was missed while offline.
+# Pending notifications for the current user, derived from live data so missed WebSocket events still surface.
 @router.get("/my-notifications")
 async def my_notifications(
     current_user=Depends(get_current_user),

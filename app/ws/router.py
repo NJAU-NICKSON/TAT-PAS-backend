@@ -74,8 +74,7 @@ async def websocket_endpoint(websocket: WebSocket):
     else:
         room = "general"
 
-    # Every user also joins a personal room so they can be notified directly
-    # regardless of department (e.g. a nurse assigned to a care team).
+    # Every user also joins a personal room so they can be notified directly regardless of department.
     personal_room = f"user:{user_id}"
     rooms = [room, personal_room]
 

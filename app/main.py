@@ -222,9 +222,7 @@ async def health_check(
     # The WebSocket route is not in the OpenAPI schema; count it from its router.
     module_counts["websocket"] = len(getattr(ws_router.router, "routes", []) or [])
 
-    # Health reflects real runtime signals (DB + scheduler). Module route
-    # counts are informational; an empty count does not by itself mean the
-    # system is unhealthy (it can happen during a cold start).
+    # Health reflects real runtime signals (DB + scheduler); module route counts are informational only.
     overall_status = "ok"
     if db_status != "ok":
         overall_status = "degraded"

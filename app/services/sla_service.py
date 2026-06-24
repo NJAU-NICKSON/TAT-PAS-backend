@@ -5,14 +5,7 @@ from pymongo.asynchronous.database import AsyncDatabase
 
 _PRIORITY_ORDER = ["stat", "nicu", "urgent", "discharge", "routine", "chemo"]
 
-# Pharmacy turnaround targets (order submitted -> dispensed), in minutes.
-# Grounded in published medication-administration standards:
-#  - STAT: ~15 min pharmacy dispense / 30 min order-to-administration (ISMP).
-#  - Urgent/NOW: within ~30-60 min (ISMP / ASHP).
-#  - Routine scheduled: ~60 min window (ISMP, consensus of 9 studies).
-# Specialty tiers (NICU, discharge, chemo) follow the same priority logic,
-# tightened or relaxed by clinical risk. These are the defaults; the auditor
-# can adjust them on the SLA Configuration page.
+# Default pharmacy turnaround targets (order submitted -> dispensed), in minutes; adjustable by the auditor.
 _DEFAULT_THRESHOLDS = {
     "stat": 15,
     "urgent": 30,

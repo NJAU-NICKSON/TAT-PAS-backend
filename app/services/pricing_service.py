@@ -62,8 +62,7 @@ def _days_between(start, end) -> int:
     return max(1, days)
 
 
-# Build line items for a visit from the catalogue: consultation, bed-days,
-# nursing, and each dispensed medication.
+# Build line items for a visit from the catalogue: consultation, bed-days, nursing, and dispensed medication.
 async def build_bill_items(db: AsyncDatabase, visit: dict) -> List[Dict[str, Any]]:
     prices = await _price_map(db)
     items: List[Dict[str, Any]] = []

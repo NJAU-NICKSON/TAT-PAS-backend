@@ -6,7 +6,6 @@ from app.security.passwords import verify_password
 from app.security.jwt import create_access_token, create_refresh_token
 
 
-# Verify a username/password and return the user if valid.
 # Raised when valid credentials belong to a deactivated account.
 class AccountDeactivatedError(Exception):
     pass

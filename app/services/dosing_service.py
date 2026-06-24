@@ -2,9 +2,7 @@ from datetime import datetime, timezone
 from typing import List, Dict, Any
 from pymongo.asynchronous.database import AsyncDatabase
 
-# Age-banded dose limits per drug. Each band gives the max mg/kg/day and the
-# absolute mg/day ceiling for that age range, so a child and an adult are held
-# to different limits. Grounded in BNF for Children / MSF / Drugs.com.
+# Age-banded dose limits per drug, giving max mg/kg/day and absolute mg/day ceiling per age range.
 DEFAULT_DOSE_LIMITS: List[Dict[str, Any]] = [
     {"drug": "paracetamol", "adult_max_single_mg": 1000, "bands": [
         {"min_age_years": 0,  "max_age_years": 1,   "max_mg_per_kg_day": 60, "abs_max_mg_day": 500},

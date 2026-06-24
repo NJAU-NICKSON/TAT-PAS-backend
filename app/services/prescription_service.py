@@ -479,8 +479,7 @@ async def advance_status(
         set_fields["receipt_number"] = update_data["receipt_number"]
 
     if role == "admin":
-        # Admin observes; the only state change it may perform is archiving.
-        # Clinical transitions belong to the accountable clinical role.
+        # Admin observes; the only state change it may perform is archiving, as clinical transitions belong to clinical roles.
         if new_status != "archived":
             raise HTTPException(
                 status_code=http_status.HTTP_403_FORBIDDEN,
@@ -521,8 +520,7 @@ async def advance_status(
             )
 
     if new_status == "verified":
-        # Only genuine clinical flags block verification. SLA breach/warning
-        # records are timing alerts for reporting, not verification blockers.
+        # Only genuine clinical flags block verification; SLA breach/warning records are timing alerts, not blockers.
         unresolved_count = await db.audit_records.count_documents({
             "prescription_id": prescription_id,
             "resolved": False,
@@ -546,8 +544,7 @@ async def advance_status(
         if ordered_at:
             set_fields["tat_order_to_submit_min"] = (now - ordered_at).total_seconds() / 60
 
-        # Resubmit after the auditor sent it back: keep the prior version as an
-        # immutable revision and apply the doctor's edited medications.
+        # Resubmit after the auditor sent it back: keep the prior version as an immutable revision and apply the edits.
         if current_status == "pending_amendment":
             set_fields["resubmitted_at"] = now
             set_fields["amendment_count"] = old_doc.get("amendment_count", 0) + 1
@@ -729,8 +726,7 @@ async def advance_status(
     elif new_status == "flagged":
         await manager.broadcast_multi(["pharmacy", "auditor", "admin"] + doctor_room, status_event)
     elif new_status == "verified":
-        # Approved by the auditor; pharmacy now processes it. Doctor, nurse,
-        # and auditor are informed it cleared review.
+        # Approved by the auditor; pharmacy now processes it and the care team is informed it cleared review.
         await manager.broadcast_multi(["pharmacy", "auditor", "admin"] + doctor_room + ward_room, status_event)
     elif new_status == "dispensed":
         # Pharmacy has dispensed; meds are ready for the ward nurse to pick up.

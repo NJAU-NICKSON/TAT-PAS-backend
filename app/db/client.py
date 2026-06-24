@@ -6,8 +6,7 @@ from app.config import get_settings
 _client: AsyncMongoClient | None = None
 
 
-# Build a client that validates Atlas TLS with certifi's CA bundle. Without
-# this, hosts with an incomplete system CA store fail the SSL handshake.
+# Build a client that validates Atlas TLS with certifi's CA bundle to avoid SSL handshake failures.
 def _build_client(uri: str) -> AsyncMongoClient:
     kwargs = {"serverSelectionTimeoutMS": 30000}
     if "mongodb+srv://" in uri or "mongodb.net" in uri:

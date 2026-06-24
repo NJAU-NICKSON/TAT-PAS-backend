@@ -122,8 +122,7 @@ async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase)
 
     doc["_id"] = result.inserted_id
     doc["id"] = str(doc["_id"])
-    # Attach display names (patient, staff) before returning so callers
-    # can safely access `patient_name` and other enriched fields.
+    # Attach display names (patient, staff) before returning so callers can access enriched fields.
     doc = await _enrich_visit_doc(doc, db)
     return VisitResponse(**doc)
 
@@ -211,10 +210,7 @@ async def list_visits(
             date_filter["$lte"] = date_to
         query["registered_at"] = date_filter
 
-    # Doctors and nurses see only patients assigned to them; admin, auditor,
-    # billing, and receptionist keep full visibility. Nurses also see the
-    # shared triage queue (patients not yet triaged / not yet assigned a nurse)
-    # so they can pick up new arrivals.
+    # Doctors and nurses see only their assigned patients (nurses also see the shared triage queue); other roles keep full visibility.
     if scope_role == "doctor" and scope_user_id:
         query["$or"] = [
             {"assigned_doctor_id": scope_user_id},
@@ -589,8 +585,7 @@ async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
             "tat_min": diff_min(visit.registered_at, visit.triaged_at or visit.doctor_assigned_at),
         },
         {
-            # Triage completes the moment it is recorded; the wait for the
-            # doctor belongs to the next stage, not to triage being in progress.
+            # Triage completes the moment it is recorded; the wait for the doctor belongs to the next stage.
             "stage": 2,
             "name": "Triage",
             "role": "nurse",
@@ -704,8 +699,7 @@ async def add_consultation_note(
         upsert=True,
     )
 
-    # The receptionist owns room/nurse assignment, so the consultation note
-    # only records clinical fields back onto the visit.
+    # The receptionist owns room/nurse assignment, so the consultation note only records clinical fields.
     visit_update: dict = {
         "assigned_doctor_name": doctor_name,
         "diagnosis": data.diagnosis,

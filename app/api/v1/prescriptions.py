@@ -60,6 +60,7 @@ async def create_prescription_endpoint(
 
     checks = run_automated_checks({"medications": [m.model_dump() for m in body.medications]})
 
+    patient_doc = None
     if body.patient_id:
         from bson import ObjectId
         patient_doc = await db.patients.find_one({"_id": ObjectId(body.patient_id)}) if ObjectId.is_valid(body.patient_id) else None
@@ -83,6 +84,9 @@ async def create_prescription_endpoint(
                     })
                     existing_codes.add(flag.code)
 
+    from app.models.patient import compute_age
+    patient_age = compute_age((patient_doc or {}).get("dob")) if patient_doc else None
+
     for check in checks:
         await create_audit_record(
             db=db,
@@ -94,6 +98,7 @@ async def create_prescription_endpoint(
             severity=check["severity"],
             recommendation=check["recommendation"],
             flag_code=check.get("flag_code", "generic"),
+            patient_age=patient_age,
             ip_address=ip,
             user_agent=ua,
         )
@@ -153,9 +158,7 @@ async def list_prescriptions(
             date_query["$lte"] = date_to
         query["ordered_at"] = date_query
 
-    # In their work queue a nurse only sees prescriptions for patients they are
-    # caring for, so they cannot administer to unrelated patients. When a
-    # specific patient_id is requested (viewing a chart) this scoping is skipped.
+    # In their work queue a nurse only sees prescriptions for patients they care for; skipped when a specific patient_id is requested.
     if role in nursing_role_values and not patient_id:
         nurse_visit_cursor = db.visits.find(
             {"$or": [
@@ -180,10 +183,7 @@ async def list_prescriptions(
     return [_doc_to_prescription(doc) for doc in docs]
 
 
-# Read access to a single prescription. Clinical staff caring for a patient
-# must be able to view the medication record, so viewing is open to all
-# authenticated roles; per-role scoping of work queues happens in the list
-# endpoint, and the administer action is gated by the status state machine.
+# Read access to a single prescription, open to all authenticated roles; work-queue scoping lives in the list endpoint.
 async def _require_prescription_access(db, prescription_id, current_user):
     prescription = await get_prescription_by_id(db, prescription_id)
     if not prescription:

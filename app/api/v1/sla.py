@@ -79,8 +79,7 @@ async def update_config(
     return result
 
 
-# Return per-drug dose limits. Read-only reference data any clinical user can
-# see (doctors need it to dose correctly when amending a prescription).
+# Return per-drug dose limits: read-only reference data any clinical user can see.
 @router.get("/dose-limits")
 async def dose_limits(
     current_user=Depends(get_current_user),

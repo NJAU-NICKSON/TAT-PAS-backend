@@ -361,6 +361,7 @@ def build_scenario(dept_map, user_ids):
                 "recommendation": rec,
                 "drug_name": meds[0]["name"],
                 "dose": meds[0]["dose"],
+                "patient_age": age,
                 "countersigned": False,
             })
             log("flag_raised", "system", "system", flag_at, "prescription", sid(rxid),

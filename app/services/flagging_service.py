@@ -16,12 +16,7 @@ class FlagResult:
     dose: str
 
 
-# Maximum-dose reference per drug, grounded in published dosing guidance
-# (BNF for Children, MSF Essential Drugs, Drugs.com). Per-drug:
-#   adult_max_single_mg : usual adult max for one dose
-#   max_mg_per_kg_day    : paediatric weight-based ceiling (mg/kg/day)
-#   abs_max_mg_day       : absolute daily ceiling regardless of weight
-# Keyed by lowercase drug name. Drugs not listed fall back to a generic rule.
+# Maximum-dose reference per drug, keyed by lowercase name; unlisted drugs use a generic rule.
 _DOSE_LIMITS = {
     "paracetamol":  {"adult_max_single_mg": 1000, "max_mg_per_kg_day": 75,  "abs_max_mg_day": 4000},
     "acetaminophen":{"adult_max_single_mg": 1000, "max_mg_per_kg_day": 75,  "abs_max_mg_day": 4000},
@@ -93,9 +88,7 @@ async def check_all_rules(prescription: dict, patient: dict, active_rxs: List[di
     return flags
 
 
-# Flag a dose against the age band for the patient: picks the band by age,
-# flags if no band covers the age, then checks mg/kg/day and the absolute
-# daily ceiling for that band.
+# Flag a dose against the patient's age band, checking mg/kg/day and the absolute daily ceiling.
 async def check_dose_for_age(med: dict, patient: Optional[dict] = None, limits_map: Optional[dict] = None) -> List[FlagResult]:
     dose = med.get("dose", "")
     name = med.get("name", "")
