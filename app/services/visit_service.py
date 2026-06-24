@@ -102,6 +102,7 @@ async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase)
         "prescription_ids": [],
         "registered_at": now,
         "doctor_assigned_at": now if assigned_doctor_id else None,
+        "triage_started_at": None,
         "triaged_at": None,
         "consultation_started_at": None,
         "consultation_ended_at": None,
@@ -368,6 +369,28 @@ async def update_visit_status(visit_id: str, status: VisitStatus, user_id: str, 
     return await update_visit(visit_id, data, user_id, db)
 
 
+# Mark the moment a nurse opens triage, so triage TAT can be measured. Idempotent.
+async def start_triage(visit_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
+    try:
+        obj_id = ObjectId(visit_id)
+    except Exception:
+        return None
+
+    now = datetime.now(timezone.utc)
+    result = await db.visits.find_one_and_update(
+        {"_id": obj_id, "triage_started_at": None, "triaged_at": None},
+        {"$set": {"triage_started_at": now, "updated_at": now}},
+        return_document=True,
+    )
+    if not result:
+        result = await db.visits.find_one({"_id": obj_id})
+        if not result:
+            return None
+    result["id"] = str(result["_id"])
+    result = await _enrich_visit_doc(result, db)
+    return VisitResponse(**result)
+
+
 # Record triage vitals and move the visit forward.
 async def triage_visit(visit_id: str, data: TriageSubmit, nurse_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
     try:
@@ -574,25 +597,33 @@ async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
     else:
         audit_start = rx_submitted_at or consultation_ended
 
+    def end_after(start, candidate):
+        s, c = _naive(start), _naive(candidate)
+        return candidate if (s and c and c >= s) else None
+
+    triage_start = getattr(visit, "triage_started_at", None) or visit.triaged_at
+    reg_start = visit.registered_at
+    reg_end   = end_after(reg_start, triage_start)
+    triage_end = end_after(triage_start, visit.triaged_at)
+
     stages = [
         {
             "stage": 1,
             "name": "Registration",
             "role": "receptionist",
-            "started_at": visit.registered_at,
-            "completed_at": visit.triaged_at or visit.doctor_assigned_at,
+            "started_at": reg_start,
+            "completed_at": reg_end,
             "target_min": 10,
-            "tat_min": diff_min(visit.registered_at, visit.triaged_at or visit.doctor_assigned_at),
+            "tat_min": diff_min(reg_start, reg_end),
         },
         {
-            # Triage completes the moment it is recorded; the wait for the doctor belongs to the next stage.
             "stage": 2,
             "name": "Triage",
             "role": "nurse",
-            "started_at": visit.triaged_at,
-            "completed_at": visit.triaged_at,
+            "started_at": triage_start,
+            "completed_at": triage_end,
             "target_min": 15,
-            "tat_min": diff_min(visit.registered_at, visit.triaged_at),
+            "tat_min": diff_min(triage_start, triage_end),
         },
         {
             "stage": 3,

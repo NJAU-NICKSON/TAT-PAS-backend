@@ -151,6 +151,7 @@ class VisitInDB(VisitBase):
     discharge_notes: Optional[str] = None
     registered_at: datetime
     doctor_assigned_at: Optional[datetime] = None
+    triage_started_at: Optional[datetime] = None
     triaged_at: Optional[datetime] = None
     consultation_started_at: Optional[datetime] = None
     consultation_ended_at: Optional[datetime] = None

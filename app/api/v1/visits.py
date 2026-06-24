@@ -114,6 +114,21 @@ async def get_consultation_note(
     return note
 
 
+# Mark the start of triage (nurse opened the triage form). Nurse only, idempotent.
+@router.post("/{visit_id}/triage/start", response_model=VisitResponse)
+async def start_triage(
+    visit_id: str,
+    current_user: UserInDB = Depends(get_current_user),
+    db: AsyncDatabase = Depends(get_database),
+):
+    if current_user.role != "nurse":
+        raise HTTPException(status_code=403, detail="Only nurses can start triage")
+    visit = await visit_service.start_triage(visit_id, db)
+    if not visit:
+        raise HTTPException(status_code=404, detail="Visit not found")
+    return visit
+
+
 # Record triage vitals and (optionally) confirm the doctor. Nurse only.
 @router.post("/{visit_id}/triage", response_model=VisitResponse)
 async def triage_visit(
