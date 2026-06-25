@@ -127,10 +127,10 @@ _AMEND_REC = ("Accepted range for a child this age is up to 30 mg/kg/day "
 
 
 def _monday_of_this_week():
-    # Most recent Monday whose week is fully in the past (avoids negative TAT).
+    
     midnight = datetime(NOW.year, NOW.month, NOW.day)
     this_monday = midnight - timedelta(days=midnight.weekday())
-    # If Friday of this week is still in the future, use last week instead.
+    
     if this_monday + timedelta(days=4) > NOW:
         return this_monday - timedelta(days=7)
     return this_monday

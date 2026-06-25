@@ -5,9 +5,8 @@ from datetime import datetime, timezone
 from bson import ObjectId
 
 
-# ObjectId type Pydantic can validate.
+# lets pydantic accept raw ObjectIds
 class PyObjectId(ObjectId):
-    # Tell Pydantic how to handle ObjectId fields.
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type, handler):
         return core_schema.no_info_after_validator_function(
@@ -16,7 +15,6 @@ class PyObjectId(ObjectId):
             serialization=core_schema.plain_serializer_function_ser_schema(str),
         )
 
-    # Validate and coerce an ObjectId value.
     @classmethod
     def validate(cls, v):
         if isinstance(v, ObjectId):
@@ -26,7 +24,6 @@ class PyObjectId(ObjectId):
         raise ValueError("Invalid ObjectId")
 
 
-# A single charge line on a bill.
 class LineItem(BaseModel):
     category: Literal[
         "consultation", "lab", "radiology", "pharmacy",
@@ -39,7 +36,6 @@ class LineItem(BaseModel):
     reference_id: Optional[str] = None
 
 
-# A payment recorded against a bill.
 class Payment(BaseModel):
     amount: float
     method: Literal["cash", "card", "insurance", "mobile_money", "sha", "nhif", "mpesa"]
@@ -49,7 +45,6 @@ class Payment(BaseModel):
     notes: Optional[str] = None
 
 
-# Shared bill fields.
 class BillBase(BaseModel):
     visit_id: str
     patient_id: str
@@ -68,14 +63,12 @@ class BillBase(BaseModel):
     insurance_details: Optional[dict] = None
 
 
-# Fields for creating a bill.
 class BillCreate(BaseModel):
     """Payload sent by the frontend to create a new bill."""
     visit_id: str
     line_items: List[LineItem] = []
 
 
-# Fields for updating a bill.
 class BillUpdate(BaseModel):
     status: Optional[Literal["open", "finalized", "paid", "partially_paid", "waived"]] = None
     line_items: Optional[List[LineItem]] = None
@@ -84,7 +77,6 @@ class BillUpdate(BaseModel):
     tax_amount: Optional[float] = None
 
 
-# Bill as stored in the database.
 class BillInDB(BillBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -100,7 +92,7 @@ class BillInDB(BillBase):
         json_encoders={ObjectId: str},
     )
 
-    # Fill in paid amount and balance from payments.
+    # derive paid + balance from the payment list
     @model_validator(mode="after")
     def compute_payment_totals(self) -> "BillInDB":
         self.paid_amount = round(sum(p.amount for p in self.payments), 2)
@@ -111,6 +103,5 @@ class BillInDB(BillBase):
 Bill = BillInDB
 
 
-# Bill returned by the API.
 class BillResponse(BillInDB):
     id: str

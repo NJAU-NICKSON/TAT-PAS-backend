@@ -4,7 +4,6 @@ from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 from dateutil.relativedelta import relativedelta
 
 
-# Patient phone and address.
 class ContactInfo(BaseModel):
     phone: Optional[str] = None
     alt_phone: Optional[str] = None
@@ -14,14 +13,12 @@ class ContactInfo(BaseModel):
     country: Optional[str] = None
 
 
-# Patient's emergency contact.
 class EmergencyContact(BaseModel):
     name: Optional[str] = None
     relationship: Optional[str] = None
     phone: Optional[str] = None
 
 
-# Patient's next of kin.
 class NextOfKin(BaseModel):
     name: Optional[str] = None
     relationship: Optional[str] = None
@@ -29,14 +26,12 @@ class NextOfKin(BaseModel):
     address: Optional[str] = None
 
 
-# A recorded allergy.
 class Allergy(BaseModel):
     substance: str
     reaction_type: Optional[str] = None
     severity: Literal["mild", "moderate", "severe"] = "moderate"
 
 
-# Patient insurance details.
 class Insurance(BaseModel):
     provider: Optional[str] = None
     policy_number: Optional[str] = None
@@ -45,19 +40,18 @@ class Insurance(BaseModel):
     expiry_date: Optional[datetime] = None
 
 
-# Kenyan National ID: digits only, 7-8 characters.
+# Kenyan ID: 7-8 digits
 def _is_valid_national_id(value: str) -> bool:
     v = value.strip()
     return v.isdigit() and 7 <= len(v) <= 8
 
 
-# True when the patient is 18 or older. Unknown DOB is treated as adult
+# unknown DOB counts as adult
 def _is_adult(dob: Optional[datetime]) -> bool:
     age = compute_age(dob)
     return age is None or age >= 18
 
 
-# Reject a date of birth in the future.
 def _validate_dob_not_future(v: Optional[datetime]) -> Optional[datetime]:
     if v is None:
         return v
@@ -68,7 +62,6 @@ def _validate_dob_not_future(v: Optional[datetime]) -> Optional[datetime]:
     return v
 
 
-# Shared patient fields.
 class PatientBase(BaseModel):
     first_name: str
     last_name: str
@@ -94,11 +87,9 @@ class PatientBase(BaseModel):
     next_of_kin: Optional[NextOfKin] = None
 
 
-# Fields for registering a patient.
 class PatientCreate(PatientBase):
     mrn: Optional[str] = None
 
-    # Require National IDs to be 7-8 digits.
     @field_validator("national_id", "guardian_national_id")
     @classmethod
     def validate_id_format(cls, v: Optional[str]) -> Optional[str]:
@@ -108,7 +99,7 @@ class PatientCreate(PatientBase):
             raise ValueError("National ID must be 7-8 digits")
         return v.strip()
 
-    # Adults (18+) need their own National ID; minors need a guardian's.
+    # adults need their own ID, minors need a guardian's
     @model_validator(mode="after")
     def validate_id_by_age(self) -> "PatientCreate":
         if _is_adult(self.dob):
@@ -120,7 +111,6 @@ class PatientCreate(PatientBase):
         return self
 
 
-# Fields for updating a patient.
 class PatientUpdate(BaseModel):
     first_name: Optional[str] = None
     last_name: Optional[str] = None
@@ -147,7 +137,6 @@ class PatientUpdate(BaseModel):
     is_pregnant: Optional[bool] = None
 
 
-# Patient as stored in the database.
 class PatientInDB(PatientBase):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -161,7 +150,6 @@ class PatientInDB(PatientBase):
     updated_at: Optional[datetime] = None
 
 
-# Patient age in whole years.
 def compute_age(dob: Optional[datetime]) -> Optional[int]:
     if dob:
         today = date.today()
@@ -170,7 +158,7 @@ def compute_age(dob: Optional[datetime]) -> Optional[int]:
     return None
 
 
-# Patient age in days (for neonates).
+# days, for neonatal dosing checks
 def compute_age_days(dob: Optional[datetime]) -> Optional[int]:
     if dob:
         today = date.today()
@@ -179,12 +167,11 @@ def compute_age_days(dob: Optional[datetime]) -> Optional[int]:
     return None
 
 
-# Patient returned by the API.
 class PatientResponse(PatientInDB):
     age: Optional[int] = None
     age_days: Optional[int] = None
 
-    # Build the patient and derive age-based flags.
+    # derive age fields from dob
     def __init__(self, **data):
         super().__init__(**data)
         if self.dob:
@@ -192,7 +179,6 @@ class PatientResponse(PatientInDB):
             object.__setattr__(self, 'age_days', compute_age_days(self.dob))
 
 
-# Condensed patient row for lists.
 class PatientSummary(BaseModel):
     id: str
     mrn: str
@@ -213,7 +199,6 @@ class PatientSummary(BaseModel):
     created_at: Optional[datetime] = None
 
 
-# A patient search hit.
 class PatientSearchResult(BaseModel):
     patients: List[PatientSummary]
     total: int

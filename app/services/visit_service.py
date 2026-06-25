@@ -8,7 +8,6 @@ from app.models.visit import VisitCreate, VisitInDB, VisitUpdate, VisitStatus, V
 from app.ws.manager import manager
 
 
-# Produce the next visit number for today.
 async def generate_visit_number(db: AsyncDatabase) -> str:
     today = datetime.now(timezone.utc)
     date_prefix = today.strftime("%Y%m%d")
@@ -42,7 +41,6 @@ async def generate_visit_number(db: AsyncDatabase) -> str:
     return f"{prefix}{seq:04d}"
 
 
-# Look up a staff member's display name.
 async def _get_user_name(db: AsyncDatabase, user_id: str) -> Optional[str]:
     if not user_id or not ObjectId.is_valid(user_id):
         return None
@@ -59,11 +57,10 @@ _ACTIVE_VISIT_STATUSES = [
 ]
 
 
-# Register a new visit for a patient.
 async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase) -> VisitInDB:
     now = datetime.now(timezone.utc)
 
-    # Block a second open visit for the same patient (prevents duplicates).
+    # one open visit per patient
     existing = await db.visits.find_one({
         "patient_id": data.patient_id,
         "status": {"$in": _ACTIVE_VISIT_STATUSES},
@@ -123,12 +120,11 @@ async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase)
 
     doc["_id"] = result.inserted_id
     doc["id"] = str(doc["_id"])
-    # Attach display names (patient, staff) before returning so callers can access enriched fields.
+    # enrich with names before returning
     doc = await _enrich_visit_doc(doc, db)
     return VisitResponse(**doc)
 
 
-# Look up a patient's display name and blood group.
 async def _get_patient_summary(db: AsyncDatabase, patient_id: str) -> tuple[Optional[str], Optional[str]]:
     if not patient_id or not ObjectId.is_valid(patient_id):
         return None, None
@@ -142,13 +138,11 @@ async def _get_patient_summary(db: AsyncDatabase, patient_id: str) -> tuple[Opti
     return name, pdoc.get("blood_group")
 
 
-# Look up a patient's display name.
 async def _get_patient_name(db: AsyncDatabase, patient_id: str) -> Optional[str]:
     name, _ = await _get_patient_summary(db, patient_id)
     return name
 
 
-# Attach patient_name and actor names to a visit document.
 async def _enrich_visit_doc(doc: dict, db: AsyncDatabase) -> dict:
     name, blood_group = await _get_patient_summary(db, str(doc.get("patient_id", "")))
     doc["patient_name"] = name
@@ -163,7 +157,7 @@ async def _enrich_visit_doc(doc: dict, db: AsyncDatabase) -> dict:
     if doc.get("consultation_nurse_id") and not doc.get("consultation_nurse_name"):
         doc["consultation_nurse_name"] = await _get_user_name(db, str(doc["consultation_nurse_id"]))
 
-    # Fall back to the doctor's consultation-room nurse/room when the visit has none on record.
+    # fall back to the doctor's room nurse/room if the visit has none
     if doc.get("assigned_doctor_id") and (not doc.get("consultation_nurse_id") or not doc.get("consultation_room")):
         room = await db.consultation_rooms.find_one(
             {"current_doctor_id": str(doc["assigned_doctor_id"])},
@@ -190,7 +184,6 @@ async def _enrich_visit_doc(doc: dict, db: AsyncDatabase) -> dict:
     return doc
 
 
-# Fetch one visit by ID, with names attached.
 async def get_visit(visit_id: str, db: AsyncDatabase) -> Optional[VisitResponse]:
     try:
         obj_id = ObjectId(visit_id)
@@ -205,7 +198,6 @@ async def get_visit(visit_id: str, db: AsyncDatabase) -> Optional[VisitResponse]
     return VisitResponse(**doc)
 
 
-# List visits with filters and paging.
 async def list_visits(
     patient_id: Optional[str],
     status: Optional[str],
@@ -236,7 +228,7 @@ async def list_visits(
             date_filter["$lte"] = date_to
         query["registered_at"] = date_filter
 
-    # Doctors and nurses see only their assigned visits; the shared intake queue is added only when a status is requested.
+    # doctors/nurses see only their own; intake queue added when a status is asked for
     if scope_role == "doctor" and scope_user_id:
         clauses: list[dict] = [{"assigned_doctor_id": scope_user_id}]
         if status:
@@ -248,7 +240,7 @@ async def list_visits(
             {"consultation_nurse_id": scope_user_id},
         ]
         if status:
-            # Intake queue: unassigned patients, scoped to this nurse's doctor (or with no doctor yet).
+            # unassigned patients for this nurse's doctor (or none yet)
             my_doctor_id = await _nurse_doctor_id(db, scope_user_id)
             doctor_match = [{"assigned_doctor_id": {"$in": [None, ""]}}]
             if my_doctor_id:
@@ -285,7 +277,6 @@ async def list_visits(
     return visits
 
 
-# Update visit status and/or clinical fields.
 async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: AsyncDatabase, role: Optional[str] = None) -> Optional[VisitResponse]:
     try:
         obj_id = ObjectId(visit_id)
@@ -295,7 +286,7 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
     now = datetime.now(timezone.utc)
     update_fields: dict = {"updated_at": now}
 
-    # Only the receptionist may set or change the consultation room.
+    # only reception sets the consultation room
     if data.consultation_room is not None and role not in (None, "receptionist"):
         raise HTTPException(status_code=403, detail="Only the receptionist can assign the consultation room.")
 
@@ -337,7 +328,7 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
         if not (existing and existing.get("doctor_assigned_at")):
             update_fields["doctor_assigned_at"] = now
 
-        # Derive the doctor's assisting nurse (and room) from their consultation room unless set explicitly.
+        # pull the assisting nurse/room off the doctor's room unless given
         if data.consultation_nurse_id is None:
             room = await db.consultation_rooms.find_one(
                 {"current_doctor_id": data.assigned_doctor_id},
@@ -388,7 +379,7 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
     result["id"] = str(result["_id"])
     result = await _enrich_visit_doc(result, db)
 
-    # Notify newly assigned staff directly via their personal rooms.
+    # ping newly assigned staff on their personal channels
     assign_rooms: list[str] = []
     if data.assigned_doctor_id is not None:
         assign_rooms.append(f"doctor:{data.assigned_doctor_id}")
@@ -415,13 +406,12 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
     return VisitResponse(**result)
 
 
-# Change a visit's status and stamp the time.
 async def update_visit_status(visit_id: str, status: VisitStatus, user_id: str, db: AsyncDatabase) -> Optional[VisitResponse]:
     data = VisitUpdate(status=status)
     return await update_visit(visit_id, data, user_id, db)
 
 
-# Mark the moment a nurse opens triage, so triage TAT can be measured. Idempotent.
+# stamp when a nurse opens triage so we can measure triage TAT; safe to call twice
 async def start_triage(visit_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
     try:
         obj_id = ObjectId(visit_id)
@@ -443,7 +433,7 @@ async def start_triage(visit_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
     return VisitResponse(**result)
 
 
-# The doctor a nurse is paired with, via their consultation room.
+# the doctor a nurse shares a consultation room with
 async def _nurse_doctor_id(db: AsyncDatabase, nurse_id: str) -> Optional[str]:
     room = await db.consultation_rooms.find_one(
         {"current_nurse_id": nurse_id}, {"current_doctor_id": 1}
@@ -451,7 +441,6 @@ async def _nurse_doctor_id(db: AsyncDatabase, nurse_id: str) -> Optional[str]:
     return str(room["current_doctor_id"]) if room and room.get("current_doctor_id") else None
 
 
-# Record triage vitals and move the visit forward.
 async def triage_visit(visit_id: str, data: TriageSubmit, nurse_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
     try:
         obj_id = ObjectId(visit_id)
@@ -465,7 +454,7 @@ async def triage_visit(visit_id: str, data: TriageSubmit, nurse_id: str, db: Asy
     if not existing:
         return None
 
-    # A nurse may only triage a patient assigned to their own doctor (the doctor in their consultation room).
+    # a nurse can only triage patients under their own doctor
     my_doctor_id = await _nurse_doctor_id(db, nurse_id)
     visit_doctor_id = existing.get("assigned_doctor_id")
     if visit_doctor_id and str(visit_doctor_id) != str(my_doctor_id or ""):
@@ -499,7 +488,7 @@ async def triage_visit(visit_id: str, data: TriageSubmit, nurse_id: str, db: Asy
     if not result:
         return None
 
-    # Mirror the triage weight onto the patient so the dosing/flagging engine can use it.
+    # copy weight to the patient so dosing/flagging can use it
     weight = data.vitals.weight_kg
     if weight and result.get("patient_id") and ObjectId.is_valid(str(result["patient_id"])):
         await db.patients.update_one(
@@ -512,7 +501,7 @@ async def triage_visit(visit_id: str, data: TriageSubmit, nurse_id: str, db: Asy
     return VisitResponse(**result)
 
 
-# Assign a bed and mark visit as admitted atomically.
+# bed assign + admit in one atomic update
 async def admit_patient(visit_id: str, data: AdmitPatient, user_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
     try:
         visit_obj_id = ObjectId(visit_id)
@@ -580,7 +569,7 @@ async def admit_patient(visit_id: str, data: AdmitPatient, user_id: str, db: Asy
     return VisitInDB(**result)
 
 
-# Discharge patient and release bed to cleaning status.
+# discharge and send the bed to cleaning
 async def discharge_patient(visit_id: str, user_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
     try:
         obj_id = ObjectId(visit_id)
@@ -638,22 +627,19 @@ async def discharge_patient(visit_id: str, user_id: str, db: AsyncDatabase) -> O
     return VisitInDB(**result)
 
 
-# Return per-stage TAT breakdown for a visit (in minutes).
+# per-stage TAT breakdown, in minutes
 async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
-    # Strip timezone info from a datetime for subtraction.
     def _naive(dt) -> Optional[datetime]:
         if dt is None:
             return None
         return dt.replace(tzinfo=None) if dt.tzinfo else dt
 
-    # Minutes between two times, or None if either is missing.
     def diff_min(a, b) -> Optional[float]:
         a, b = _naive(a), _naive(b)
         if a and b:
             return round((b - a).total_seconds() / 60, 1)
         return None
 
-    # Earliest of the given times, ignoring None.
     def earliest(values):
         vals = [_naive(v) for v in values if v is not None]
         return min(vals) if vals else None
@@ -771,7 +757,7 @@ async def build_journey_summary(visit: VisitInDB, db: AsyncDatabase) -> dict:
     }
 
 
-# Store (upsert) a consultation note on the visit document and update clinical fields.
+# upsert the consultation note and clinical fields
 async def add_consultation_note(
     visit_id: str, data: ConsultationNoteCreate, doctor_id: str, db: AsyncDatabase
 ) -> Optional[ConsultationNote]:
@@ -815,7 +801,7 @@ async def add_consultation_note(
         upsert=True,
     )
 
-    # The receptionist owns room/nurse assignment, so the consultation note only records clinical fields.
+    # reception owns room/nurse, so the note keeps only clinical fields
     visit_update: dict = {
         "assigned_doctor_name": doctor_name,
         "diagnosis": data.diagnosis,
@@ -833,7 +819,6 @@ async def add_consultation_note(
     return ConsultationNote(**{k: v for k, v in (note_doc or note).items() if k != "_id"}) if note_doc else ConsultationNote(**note)
 
 
-# Retrieve the consultation note for a visit.
 async def get_consultation_note(visit_id: str, db: AsyncDatabase) -> Optional[ConsultationNote]:
     doc = await db.consultation_notes.find_one({"visit_id": visit_id})
     if not doc:
@@ -842,7 +827,6 @@ async def get_consultation_note(visit_id: str, db: AsyncDatabase) -> Optional[Co
     return ConsultationNote(**{k: v for k, v in doc.items() if k != "_id"})
 
 
-# Link a prescription onto a visit.
 async def add_prescription_to_visit(visit_id: str, prescription_id: str, db: AsyncDatabase) -> bool:
     try:
         obj_id = ObjectId(visit_id)

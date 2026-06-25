@@ -4,7 +4,7 @@ from fastapi import HTTPException, status
 from app.config import get_settings
 
 
-# Build a short-lived JWT access token for a user.
+# short-lived access token
 def create_access_token(data: dict) -> str:
     settings = get_settings()
     payload = data.copy()
@@ -15,7 +15,7 @@ def create_access_token(data: dict) -> str:
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-# Build a long-lived JWT refresh token for a user.
+# long-lived refresh token
 def create_refresh_token(data: dict) -> str:
     settings = get_settings()
     payload = data.copy()
@@ -26,7 +26,7 @@ def create_refresh_token(data: dict) -> str:
     return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
 
 
-# Decode and validate a JWT, returning its claims.
+# raises 401 if the token is bad or expired
 def decode_token(token: str) -> dict:
     settings = get_settings()
     try:

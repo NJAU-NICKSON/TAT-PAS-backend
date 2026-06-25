@@ -18,6 +18,7 @@ from app.services.audit_service import (
     mark_events_reviewed,
     create_audit_record,
     verify_chain_integrity,
+    verify_prescription_integrity,
 )
 from app.services.prescription_service import add_flag
 
@@ -88,6 +89,16 @@ async def verify_integrity(
     db: AsyncDatabase = Depends(get_database),
 ):
     return await verify_chain_integrity(db)
+
+
+# Verify integrity for a single prescription (by rx_number or id) and return its trail.
+@router.get("/verify-integrity/{identifier}")
+async def verify_prescription_integrity_endpoint(
+    identifier: str,
+    current_user=Depends(require_roles(Roles.auditor, Roles.admin)),
+    db: AsyncDatabase = Depends(get_database),
+):
+    return await verify_prescription_integrity(db, identifier)
 
 
 # Full immutable audit log. Append-only. Filterable. Paginated.

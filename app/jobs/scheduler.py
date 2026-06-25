@@ -9,7 +9,6 @@ scheduler = AsyncIOScheduler(
     job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 60}
 )
 
-# Start the background job scheduler.
 async def start_scheduler():
     db = await get_database()
     
@@ -78,6 +77,6 @@ async def start_scheduler():
     )
     
     scheduler.start()
-# Stop the background job scheduler.
+
 async def stop_scheduler():
     scheduler.shutdown()

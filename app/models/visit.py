@@ -4,7 +4,6 @@ from typing import Optional, List, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
-# Types of visit (OPD, IPD, etc.).
 class VisitType(str, Enum):
     opd = "opd"
     ipd = "ipd"
@@ -15,7 +14,6 @@ class VisitType(str, Enum):
     nicu = "nicu"
 
 
-# Visit workflow states.
 class VisitStatus(str, Enum):
     registered = "registered"
     triaged = "triaged"
@@ -30,7 +28,6 @@ class VisitStatus(str, Enum):
     cancelled = "cancelled"
 
 
-# Triage vital-sign readings.
 class VitalSigns(BaseModel):
     blood_pressure_systolic: Optional[int] = None
     blood_pressure_diastolic: Optional[int] = None
@@ -43,7 +40,6 @@ class VitalSigns(BaseModel):
     triage_notes: Optional[str] = None
 
 
-# Shared visit fields.
 class VisitBase(BaseModel):
     patient_id: str
     visit_type: VisitType
@@ -52,26 +48,22 @@ class VisitBase(BaseModel):
     priority: Literal["routine", "urgent", "critical", "immediate"] = "routine"
 
 
-# Fields for registering a visit.
 class VisitCreate(VisitBase):
     assigned_doctor_id: Optional[str] = None
 
 
-# Triage submission payload.
 class TriageSubmit(BaseModel):
     vitals: VitalSigns
     assigned_doctor_id: Optional[str] = None
     consultation_room: Optional[str] = None
 
 
-# Admission request body.
 class AdmitPatient(BaseModel):
     bed_id: str
     notes: Optional[str] = None
     assigned_doctor_id: Optional[str] = None
 
 
-# Fields for updating a visit.
 class VisitUpdate(BaseModel):
     status: Optional[VisitStatus] = None
     assigned_doctor_id: Optional[str] = None
@@ -87,7 +79,6 @@ class VisitUpdate(BaseModel):
     discharge_notes: Optional[str] = None
 
 
-# Consultation-note submission payload.
 class ConsultationNoteCreate(BaseModel):
     """Payload the client sends when creating/updating a consultation note."""
     consultation_room: Optional[str] = None
@@ -101,7 +92,6 @@ class ConsultationNoteCreate(BaseModel):
     follow_up_date: Optional[str] = None
 
 
-# A saved consultation note.
 class ConsultationNote(BaseModel):
     id: Optional[str] = None
     visit_id: Optional[str] = None
@@ -122,7 +112,6 @@ class ConsultationNote(BaseModel):
     updated_at: Optional[datetime] = None
 
 
-# Visit as stored in the database.
 class VisitInDB(VisitBase):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -162,7 +151,6 @@ class VisitInDB(VisitBase):
     updated_at: Optional[datetime] = None
 
 
-# Visit returned by the API.
 class VisitResponse(VisitInDB):
     patient_name: Optional[str] = None
     patient_blood_group: Optional[str] = None

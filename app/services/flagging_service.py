@@ -5,7 +5,6 @@ from pymongo.asynchronous.database import AsyncDatabase
 from app.models.audit import AuditSeverity
 
 
-# Result of a single safety-rule check.
 @dataclass
 class FlagResult:
     code: str
@@ -16,7 +15,7 @@ class FlagResult:
     dose: str
 
 
-# Maximum-dose reference per drug, keyed by lowercase name; unlisted drugs use a generic rule.
+# max-dose table by lowercase name; unlisted drugs hit a generic rule
 _DOSE_LIMITS = {
     "paracetamol":  {"adult_max_single_mg": 1000, "max_mg_per_kg_day": 75,  "abs_max_mg_day": 4000},
     "acetaminophen":{"adult_max_single_mg": 1000, "max_mg_per_kg_day": 75,  "abs_max_mg_day": 4000},
@@ -28,7 +27,7 @@ _DOSE_LIMITS = {
     "furosemide":   {"adult_max_single_mg": 80,   "max_mg_per_kg_day": 6,   "abs_max_mg_day": 600},
 }
 
-# Doses per day implied by a frequency code or label, for mg/kg/day calculations.
+# frequency code -> doses per day, for mg/kg/day math
 _FREQ_PER_DAY = {
     "od": 1, "daily": 1, "qd": 1, "once daily": 1,
     "bd": 2, "bid": 2, "twice daily": 2,
@@ -38,7 +37,7 @@ _FREQ_PER_DAY = {
 }
 
 
-# Parse the milligrams in a dose string ("500mg", "1g" -> 1000).
+# "500mg" / "1g" -> mg
 def _parse_mg(dose: str) -> Optional[float]:
     if not dose:
         return None
@@ -48,14 +47,14 @@ def _parse_mg(dose: str) -> Optional[float]:
     mg = re.search(r"(\d+(?:\.\d+)?)\s*mg", dose, re.IGNORECASE)
     if mg:
         return float(mg.group(1))
-    # A bare number with no unit is treated as milligrams (the form's default unit).
+    # bare number = mg (the form's default unit)
     bare = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*", dose)
     if bare:
         return float(bare.group(1))
     return None
 
 
-# Total milligrams a med delivers per day, from its dose and frequency.
+# mg/day from dose x frequency
 def _mg_per_day(med: dict) -> Optional[float]:
     per_dose = _parse_mg(med.get("dose", ""))
     if per_dose is None:
@@ -64,11 +63,10 @@ def _mg_per_day(med: dict) -> Optional[float]:
     return per_dose * _FREQ_PER_DAY.get(freq, 1)
 
 
-# Run every safety rule against a prescription and collect flags.
 async def check_all_rules(prescription: dict, patient: dict, active_rxs: List[dict], db: AsyncDatabase) -> List[FlagResult]:
     flags = []
 
-    # Load configurable dose limits (falls back to the built-in table).
+    # configurable limits, falling back to the built-in table
     try:
         from app.services.dosing_service import get_dose_limit_map
         limits_map = await get_dose_limit_map(db)
@@ -92,14 +90,14 @@ async def check_all_rules(prescription: dict, patient: dict, active_rxs: List[di
     return flags
 
 
-# Flag a dose against the patient's age band, checking mg/kg/day and the absolute daily ceiling.
+# checks mg/kg/day and the absolute daily ceiling for the age band
 async def check_dose_for_age(med: dict, patient: Optional[dict] = None, limits_map: Optional[dict] = None) -> List[FlagResult]:
     dose = med.get("dose", "")
     name = med.get("name", "")
     limits = (limits_map or _DOSE_LIMITS).get(name.strip().lower())
     daily_mg = _mg_per_day(med)
 
-    # Unknown drug: conservative flat fallback.
+    # unknown drug, flat fallback
     if not limits:
         per_dose = _parse_mg(dose)
         if per_dose and per_dose > 1000:
@@ -119,7 +117,7 @@ async def check_dose_for_age(med: dict, patient: Optional[dict] = None, limits_m
     if age is not None and bands:
         from app.services.dosing_service import band_for_age
         band = band_for_age(bands, age)
-        # No band covers this age -> drug not approved for this age.
+        # no band for this age = not approved for it
         if band is None:
             return [FlagResult(
                 code="age_restriction", severity=AuditSeverity.high,
@@ -128,7 +126,7 @@ async def check_dose_for_age(med: dict, patient: Optional[dict] = None, limits_m
                 drug_name=name, dose=dose,
             )]
 
-    # If we have no age, use the widest (adult) band as a fallback ceiling.
+    # no age: fall back to the widest (adult) band
     if band is None and bands:
         band = max(bands, key=lambda b: b.get("abs_max_mg_day", 0))
     if band is None:
@@ -138,7 +136,7 @@ async def check_dose_for_age(med: dict, patient: Optional[dict] = None, limits_m
     max_kg = band.get("max_mg_per_kg_day") or 0
     max_abs = band.get("abs_max_mg_day") or 0
 
-    # Weight-based check within the band (primary safeguard for children).
+    # weight-based check, the main safeguard for children
     if daily_mg and weight and max_kg > 0:
         mg_per_kg_day = daily_mg / weight
         if mg_per_kg_day > max_kg:
@@ -150,7 +148,7 @@ async def check_dose_for_age(med: dict, patient: Optional[dict] = None, limits_m
                 drug_name=name, dose=dose,
             )]
 
-    # Absolute daily ceiling for this age band.
+    # absolute daily ceiling
     if daily_mg and max_abs and daily_mg > max_abs:
         age_txt = f" for age {age}" if age is not None else ""
         return [FlagResult(
@@ -163,7 +161,6 @@ async def check_dose_for_age(med: dict, patient: Optional[dict] = None, limits_m
     return []
 
 
-# Flag a course that runs longer than recommended.
 async def check_extended_duration(med: dict) -> List[FlagResult]:
     duration = med.get("duration_days", 0)
     if duration > 30:
@@ -178,7 +175,6 @@ async def check_extended_duration(med: dict) -> List[FlagResult]:
     return []
 
 
-# Flag a drug the patient is already on.
 async def check_duplicate_active_rx(med: dict, active_rxs: List[dict]) -> List[FlagResult]:
     drug_name = med.get("name", "").lower()
     
@@ -196,7 +192,6 @@ async def check_duplicate_active_rx(med: dict, active_rxs: List[dict]) -> List[F
     return []
 
 
-# Flag a drug the patient is allergic to.
 async def check_allergy_match(med: dict, patient: dict) -> List[FlagResult]:
     drug_name = med.get("name", "").lower()
     allergies = patient.get("allergies") or []
@@ -219,7 +214,6 @@ async def check_allergy_match(med: dict, patient: dict) -> List[FlagResult]:
     return []
 
 
-# Flag interactions with the patient's other drugs.
 async def check_drug_drug_interaction(med: dict, prescription: dict, db: AsyncDatabase) -> List[FlagResult]:
     drug_name = med.get("name", "").lower()
     other_meds = [m.get("name", "").lower() for m in prescription.get("medications", []) if m.get("name", "").lower() != drug_name]
@@ -244,7 +238,6 @@ async def check_drug_drug_interaction(med: dict, prescription: dict, db: AsyncDa
     return []
 
 
-# Flag controlled or scheduled drugs.
 async def check_controlled_substance(med: dict, db: AsyncDatabase) -> List[FlagResult]:
     drug_name = med.get("name", "").lower()
     controlled = await db.controlled_substances.find_one({"name": {"$regex": f"^{re.escape(drug_name)}$", "$options": "i"}})
@@ -261,7 +254,6 @@ async def check_controlled_substance(med: dict, db: AsyncDatabase) -> List[FlagR
     return []
 
 
-# Flag drugs unsafe for neonates.
 async def check_neonatal(med: dict) -> List[FlagResult]:
     return [FlagResult(
         code="neonatal_rx",
@@ -273,7 +265,6 @@ async def check_neonatal(med: dict) -> List[FlagResult]:
     )]
 
 
-# Flag drugs risky in pregnancy.
 async def check_pregnancy_risk(med: dict, db: AsyncDatabase) -> List[FlagResult]:
     drug_name = med.get("name", "").lower()
     category_x = await db.category_x_drugs.find_one({"name": {"$regex": f"^{re.escape(drug_name)}$", "$options": "i"}})

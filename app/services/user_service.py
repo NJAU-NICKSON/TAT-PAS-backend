@@ -6,7 +6,6 @@ from app.models.user import UserCreate, UserInDB, UserResponse, UserUpdate
 from app.security.passwords import hash_password
 
 
-# Convert a user document to the API response model.
 def _doc_to_user_response(doc: dict) -> UserResponse:
     return UserResponse(
         id=str(doc["_id"]),
@@ -20,13 +19,11 @@ def _doc_to_user_response(doc: dict) -> UserResponse:
     )
 
 
-# Convert a user document to the internal model.
 def _doc_to_user_in_db(doc: dict) -> UserInDB:
     doc["id"] = str(doc["_id"])
     return UserInDB(**doc)
 
 
-# List users, optionally filtered by role.
 async def get_users(
     db: AsyncDatabase, skip: int = 0, limit: int = 20, role: Optional[str] = None
 ) -> list[UserResponse]:
@@ -38,7 +35,6 @@ async def get_users(
     return [_doc_to_user_response(doc) for doc in docs]
 
 
-# Fetch a user by ID.
 async def get_user_by_id(
     db: AsyncDatabase, user_id: str
 ) -> Optional[UserInDB]:
@@ -52,7 +48,6 @@ async def get_user_by_id(
     return _doc_to_user_in_db(doc)
 
 
-# Fetch a user by username.
 async def get_user_by_username(
     db: AsyncDatabase, username: str
 ) -> Optional[UserInDB]:
@@ -62,7 +57,6 @@ async def get_user_by_username(
     return _doc_to_user_in_db(doc)
 
 
-# Create a new staff account.
 async def create_user(
     db: AsyncDatabase, user_create: UserCreate
 ) -> UserResponse:
@@ -82,7 +76,6 @@ async def create_user(
     return _doc_to_user_response(doc)
 
 
-# Update a user's fields.
 async def update_user(
     db: AsyncDatabase, user_id: str, update: UserUpdate
 ) -> Optional[UserResponse]:
@@ -117,7 +110,7 @@ async def update_user(
     return _doc_to_user_response(result)
 
 
-# Soft-delete / restore a user by toggling is_active.
+# soft delete: just flips is_active
 async def set_user_active(
     db: AsyncDatabase, user_id: str, is_active: bool
 ) -> Optional[UserResponse]:

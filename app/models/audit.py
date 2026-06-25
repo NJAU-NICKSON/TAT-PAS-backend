@@ -4,7 +4,6 @@ from pydantic import BaseModel, Field
 from enum import Enum
 
 
-# Kinds of audit records (automated, manual, etc.).
 class AuditType(str, Enum):
     automated = "automated"
     manual = "manual"
@@ -15,7 +14,6 @@ class AuditType(str, Enum):
     resolution = "resolution"
 
 
-# Severity levels for a flag.
 class AuditSeverity(str, Enum):
     low = "low"
     medium = "medium"
@@ -23,7 +21,6 @@ class AuditSeverity(str, Enum):
     critical = "critical"
 
 
-# Allowed ways to resolve a flag.
 class ResolutionType(str, Enum):
     accepted_risk = "accepted_risk"
     dose_adjusted = "dose_adjusted"
@@ -32,7 +29,6 @@ class ResolutionType(str, Enum):
     false_positive = "false_positive"
 
 
-# Kinds of security events.
 class SecurityEventType(str, Enum):
     login_failure = "login_failure"
     role_change = "role_change"
@@ -41,7 +37,6 @@ class SecurityEventType(str, Enum):
     permission_change = "permission_change"
 
 
-# Shared audit-record fields.
 class AuditRecordBase(BaseModel):
     prescription_id: str
     visit_id: Optional[str] = None
@@ -86,17 +81,14 @@ class AuditRecordBase(BaseModel):
     patient_name: Optional[str] = None
 
 
-# Audit record as stored in the database.
 class AuditRecordInDB(AuditRecordBase):
     id: str
 
 
-# Audit record returned by the API.
 class AuditRecordResponse(AuditRecordBase):
     id: str
 
 
-# Request body to countersign a flag.
 class CountersignRequest(BaseModel):
     flag_id: str = Field(..., description="ID of the original flag record to countersign")
     note: str = Field(..., min_length=10, description="Attestation note from countersigning auditor")

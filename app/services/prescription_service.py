@@ -28,7 +28,7 @@ _DEFAULT_SLA_THRESHOLDS: Dict[str, float] = {
 _SLA_WARNING_FRACTION = 0.75
 
 
-# Coerce a datetime to timezone-aware UTC.
+# force tz-aware UTC
 def _ensure_aware(value: Optional[datetime]) -> Optional[datetime]:
     if value is None:
         return None
@@ -37,14 +37,13 @@ def _ensure_aware(value: Optional[datetime]) -> Optional[datetime]:
     return value
 
 
-# Stringify an id reference, passing through None.
 def _normalize_ref(value: Any) -> Optional[str]:
     if value is None:
         return None
     return str(value) if not isinstance(value, str) else value
 
 
-# Reject prescribing until triage and consultation are done.
+# can't prescribe before triage + consultation
 async def _ensure_visit_ready_for_prescription(
     db: AsyncDatabase,
     prescription: PrescriptionCreate,
@@ -91,7 +90,6 @@ async def _ensure_visit_ready_for_prescription(
         )
 
 
-# Convert a prescription document to a model.
 def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
     medications = []
     for m in doc.get("medications", []):
@@ -100,7 +98,6 @@ def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
         else:
             medications.append(m)
 
-    # Stringify an ObjectId, passing through None.
     def _str(val) -> Optional[str]:
         return _normalize_ref(val)
 
@@ -183,7 +180,7 @@ def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
     )
 
 
-# Attach patient_name, doctor_name, and actor names to prescription docs in-place.
+# fill in patient/doctor/actor names
 async def _enrich_docs_with_names(db: AsyncDatabase, docs: List[dict]) -> List[dict]:
     patient_ids = list({d["patient_id"] for d in docs if d.get("patient_id")})
     user_id_set: set = set()
@@ -209,7 +206,7 @@ async def _enrich_docs_with_names(db: AsyncDatabase, docs: List[dict]) -> List[d
             async for udoc in cursor:
                 user_map[str(udoc["_id"])] = udoc.get("full_name") or udoc.get("username") or ""
 
-    # Resolve department and ward names from each prescription's linked visit.
+    # dept/ward names come off the linked visit
     visit_ids = list({str(d["visit_id"]) for d in docs if d.get("visit_id")})
     visit_map: Dict[str, dict] = {}
     dept_ids: set = set()
@@ -248,7 +245,7 @@ async def _enrich_docs_with_names(db: AsyncDatabase, docs: List[dict]) -> List[d
     return docs
 
 
-# Look up the SLA threshold for a given priority from the config collection.
+# SLA threshold for a priority, from sla_config
 async def _get_sla_threshold(db: AsyncDatabase, priority: str) -> float:
     doc = await db.sla_config.find_one({"priority": priority})
     if doc and doc.get("threshold_min") is not None:
@@ -256,7 +253,7 @@ async def _get_sla_threshold(db: AsyncDatabase, priority: str) -> float:
     return _DEFAULT_SLA_THRESHOLDS.get(priority, 60.0)
 
 
-# Generate a unique, human-readable prescription number (e.g. RX-2026-0042).
+# e.g. RX-2026-0042
 async def generate_rx_number(db: AsyncDatabase) -> str:
     year = datetime.now(timezone.utc).strftime("%Y")
     counter_id = f"rx_{year}"
@@ -282,7 +279,7 @@ async def generate_rx_number(db: AsyncDatabase) -> str:
     return f"{prefix}{seq:04d}"
 
 
-# Generate a unique dispensing receipt number (e.g. RCP-2026-0042).
+# e.g. RCP-2026-0042
 async def generate_receipt_number(db: AsyncDatabase) -> str:
     year = datetime.now(timezone.utc).strftime("%Y")
     counter_id = f"receipt_{year}"
@@ -308,7 +305,6 @@ async def generate_receipt_number(db: AsyncDatabase) -> str:
     return f"{prefix}{seq:04d}"
 
 
-# Create a prescription and link it to its visit.
 async def create_prescription(
     db: AsyncDatabase,
     prescription: PrescriptionCreate,
@@ -355,7 +351,7 @@ async def create_prescription(
             {"_id": ObjectId(prescription.visit_id)},
             {"$addToSet": {"prescription_ids": str(result.inserted_id)}},
         )
-        # Inherit the visit's department/ward when the order didn't specify one.
+        # fall back to the visit's dept/ward if none given
         if not prescription.department_id:
             vdoc = await db.visits.find_one(
                 {"_id": ObjectId(prescription.visit_id)},
@@ -384,13 +380,12 @@ async def create_prescription(
         "timestamp": now.isoformat(),
         "triggered_by_role": "doctor",
     }
-    # New scripts go to the auditor for review before pharmacy.
+    # auditor reviews before it reaches pharmacy
     await manager.broadcast_multi(["auditor", "admin"], event)
 
     return _doc_to_prescription(doc)
 
 
-# List prescriptions with filters, names attached.
 async def get_prescriptions(
     db: AsyncDatabase,
     status: Optional[str] = None,
@@ -425,7 +420,7 @@ async def get_prescriptions(
     return results
 
 
-# Work queue for a role: auditors review, pharmacists dispense verified.
+# per-role queue: auditors review, pharmacists dispense
 async def get_prescription_queue(
     db: AsyncDatabase,
     skip: int = 0,
@@ -447,7 +442,7 @@ async def get_prescription_queue(
     return results
 
 
-# Prescriptions a given pharmacist has dispensed, newest first (for reprinting receipts).
+# a pharmacist's dispensed scripts, for receipt reprints
 async def get_dispensed_by(
     db: AsyncDatabase,
     pharmacist_id: str,
@@ -461,7 +456,6 @@ async def get_dispensed_by(
     return [_doc_to_prescription(doc) for doc in docs]
 
 
-# Fetch one prescription by ID.
 async def get_prescription_by_id(
     db: AsyncDatabase, prescription_id: str
 ) -> Optional[PrescriptionInDB]:
@@ -476,7 +470,7 @@ async def get_prescription_by_id(
     return _doc_to_prescription(docs[0])
 
 
-# Return all audit records for a prescription, sorted oldest first.
+# oldest first
 async def get_prescription_history(
     db: AsyncDatabase, prescription_id: str
 ) -> List[dict]:
@@ -518,7 +512,7 @@ PERMITTED_TRANSITIONS = {
 }
 
 
-# Move a prescription to its next state and record TAT.
+# advance the workflow state and stamp TAT
 async def advance_status(
     db: AsyncDatabase,
     prescription_id: str,
@@ -543,7 +537,7 @@ async def advance_status(
 
     current_status = old_doc["status"]
 
-    # Idempotent: a repeat action (e.g. double-click) on an already-current status is a no-op success.
+    # repeat action on the same status is a no-op
     if current_status == new_status:
         return _doc_to_prescription(old_doc)
 
@@ -566,7 +560,7 @@ async def advance_status(
         set_fields["receipt_number"] = update_data["receipt_number"].strip()
 
     if role == "admin":
-        # Admin observes; the only state change it may perform is archiving, as clinical transitions belong to clinical roles.
+        # admin can only archive, clinical steps belong to clinical roles
         if new_status != "archived":
             raise HTTPException(
                 status_code=http_status.HTTP_403_FORBIDDEN,
@@ -607,7 +601,7 @@ async def advance_status(
             )
 
     if new_status == "verified":
-        # Only genuine clinical flags block verification; SLA breach/warning records are timing alerts, not blockers.
+        # SLA records are timing alerts, only real clinical flags block verify
         unresolved_count = await db.audit_records.count_documents({
             "prescription_id": prescription_id,
             "resolved": False,
@@ -631,7 +625,7 @@ async def advance_status(
         if ordered_at:
             set_fields["tat_order_to_submit_min"] = (now - ordered_at).total_seconds() / 60
 
-        # Resubmit after the auditor sent it back: keep the prior version as an immutable revision and apply the edits.
+        # on resubmit, snapshot the old version before applying edits
         if current_status == "pending_amendment":
             set_fields["resubmitted_at"] = now
             set_fields["amendment_count"] = old_doc.get("amendment_count", 0) + 1
@@ -683,7 +677,7 @@ async def advance_status(
     elif new_status == "dispensed":
         set_fields["dispensed_at"] = now
         set_fields["dispensed_by_id"] = user_id
-        # Auto-generate the dispensing receipt number unless one is already on record.
+        # generate a receipt number if it doesn't have one yet
         if not old_doc.get("receipt_number") and not set_fields.get("receipt_number"):
             set_fields["receipt_number"] = await generate_receipt_number(db)
         verified_at = _ensure_aware(old_doc.get("verified_at"))
@@ -808,21 +802,21 @@ async def advance_status(
     ward_room = [f"ward:{str(department_id_val)}"] if department_id_val else []
 
     if new_status == "submitted":
-        # Awaiting the auditor's safety check before pharmacy.
+        # waiting on the auditor's safety check
         await manager.broadcast_multi(["auditor", "admin"], status_event)
     elif new_status == "pending_amendment":
-        # Auditor sent it back: the prescribing doctor must be told.
+        # sent back, so the doctor needs to know
         await manager.broadcast_multi(["auditor", "admin"] + doctor_room, status_event)
     elif new_status == "flagged":
         await manager.broadcast_multi(["pharmacy", "auditor", "admin"] + doctor_room, status_event)
     elif new_status == "verified":
-        # Approved by the auditor; pharmacy now processes it and the care team is informed it cleared review.
+        # cleared review, pharmacy takes it from here
         await manager.broadcast_multi(["pharmacy", "auditor", "admin"] + doctor_room + ward_room, status_event)
     elif new_status == "dispensed":
-        # Pharmacy has dispensed; meds are ready for the ward nurse to pick up.
+        # dispensed, ready for the ward nurse
         await manager.broadcast_multi(["pharmacy", "receptionist", "admin"] + doctor_room + ward_room, status_event)
     elif new_status == "administered":
-        # Administration is visible to everyone in the chain.
+        # everyone in the chain sees administration
         await manager.broadcast_multi(
             ["pharmacy", "auditor", "receptionist", "admin"] + doctor_room + ward_room,
             status_event,
@@ -831,7 +825,6 @@ async def advance_status(
     return _doc_to_prescription(result)
 
 
-# Attach a safety flag to a prescription.
 async def add_flag(
     db: AsyncDatabase,
     prescription_id: str,
@@ -874,7 +867,7 @@ async def add_flag(
     return _doc_to_prescription(result)
 
 
-# Run quick inline safety checks on the medications.
+# fast in-process checks before the full flagging service
 def run_automated_checks(prescription: dict) -> List[dict]:
     issues: List[dict] = []
     medications = prescription.get("medications", [])

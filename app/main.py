@@ -25,7 +25,7 @@ limiter = Limiter(key_func=get_remote_address)
 SERVER_STARTED_AT = datetime.now(timezone.utc)
 
 
-# Start and stop app resources (DB, scheduler).
+# wires up DB + scheduler for the app lifetime
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await connect_db()
@@ -87,7 +87,6 @@ app.include_router(consultation_rooms.router, prefix="/api/v1")
 app.include_router(activity.router, prefix="/api/v1")
 app.include_router(ws_router.router, prefix="")
 
-# Return 429 when a rate limit is hit.
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
     return JSONResponse(
@@ -95,7 +94,7 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
         content={"detail": "Too many requests", "code": "RATE_LIMIT_EXCEEDED"}
     )
 
-# Format request-validation errors as JSON.
+# flatten pydantic errors into field/message pairs
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = exc.errors()
@@ -112,7 +111,6 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
 
 
-# Normalise HTTP error responses.
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
@@ -120,7 +118,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
         content={"detail": exc.detail},
     )
 
-# Catch-all handler for unexpected errors.
+# last resort so we never leak a stack trace
 @app.exception_handler(Exception)
 async def general_exception_handler(request: Request, exc: Exception):
     logger.error("Unhandled exception on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
@@ -129,19 +127,18 @@ async def general_exception_handler(request: Request, exc: Exception):
         content={"detail": "An internal error occurred", "code": "INTERNAL_ERROR"},
     )
 
-# Redirect the root path to the API docs.
 @app.get("/", include_in_schema=False)
 async def root_redirect():
     return RedirectResponse(url="/docs")
 
 
-# Public liveness probe for the host (Render). No auth, no DB dependency.
+# Render hits this to keep the dyno alive; no auth, no DB
 @app.get("/health", tags=["health"])
 async def health():
     return {"status": "ok", "service": "tat-pas-backend"}
 
 
-# Detailed health check.
+# admin-only, checks DB + scheduler + route coverage
 @app.get("/api/v1/admin/health", tags=["admin"])
 async def health_check(
     full: bool = False,
@@ -190,7 +187,7 @@ async def health_check(
     unexpected_routes = []
     all_routes = []
 
-    # Read route paths from the OpenAPI schema, falling back to app.routes.
+    # prefer the OpenAPI paths, fall back to app.routes
     route_paths: list[str] = []
     try:
         schema = app.openapi()
@@ -219,10 +216,10 @@ async def health_check(
         if full:
             all_routes.append({"path": path})
 
-    # The WebSocket route is not in the OpenAPI schema; count it from its router.
+    # ws isn't in the schema, count it off its own router
     module_counts["websocket"] = len(getattr(ws_router.router, "routes", []) or [])
 
-    # Health reflects real runtime signals (DB + scheduler); module route counts are informational only.
+    # status comes from DB + scheduler; route counts are just info
     overall_status = "ok"
     if db_status != "ok":
         overall_status = "degraded"

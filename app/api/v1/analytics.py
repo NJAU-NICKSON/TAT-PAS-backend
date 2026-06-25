@@ -58,11 +58,11 @@ async def tat_metrics(
         if metrics.get("slowest_prescriptions"):
             writer.writerow([])
             writer.writerow(["Slowest Prescriptions"])
-            writer.writerow(["id", "patient_id", "total_tat_minutes", "ordered_at"])
+            writer.writerow(["rx_number", "patient_name", "total_tat_minutes", "ordered_at"])
             for p in metrics["slowest_prescriptions"]:
                 writer.writerow([
-                    p.get("id", ""),
-                    p.get("patient_id", ""),
+                    p.get("rx_number") or p.get("id", ""),
+                    p.get("patient_name") or p.get("patient_id", ""),
                     p.get("total_tat_minutes", ""),
                     p.get("ordered_at", ""),
                 ])

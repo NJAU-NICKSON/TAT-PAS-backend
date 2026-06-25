@@ -8,7 +8,7 @@ from app.services.activity_service import list_activity, log_action
 router = APIRouter(prefix="/activity", tags=["activity"])
 
 
-# Record a client-side action (e.g. printing a receipt or prescription).
+# Record a client-side action like printing a receipt or prescription.
 @router.post("/log", status_code=204)
 async def log_client_action(
     request: Request,
@@ -100,7 +100,7 @@ async def my_notifications(
     return out[:40]
 
 
-# List user-action log entries. Admin and auditor only.
+# List user-action log entries this for  Admin and auditor only.
 @router.get("")
 async def get_activity(
     action: Optional[str] = Query(None),

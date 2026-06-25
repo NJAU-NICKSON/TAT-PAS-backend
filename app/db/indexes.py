@@ -1,10 +1,10 @@
 from pymongo.asynchronous.database import AsyncDatabase
 from pymongo import ASCENDING, DESCENDING, TEXT
 
-# Create all indexes idempotently - only creates if not already present.
+# idempotent, skips anything already there
 async def create_indexes(db: AsyncDatabase) -> None:
 
-    # Check if an index with the exact key pattern exists (ignoring name).
+    # match on key pattern, not the index name
     async def index_exists(collection, keys):
         existing = await collection.index_information()
         for idx_name, idx_info in existing.items():
@@ -53,7 +53,7 @@ async def create_indexes(db: AsyncDatabase) -> None:
     collection = db.patients
     if not await index_exists(collection, [("mrn", ASCENDING)]):
         await collection.create_index("mrn", unique=True)
-    # Unique only when national_id is a real string; a sparse index still collides on explicit nulls (minors).
+    # partial, not sparse: minors share null national_id and sparse would still clash
     nid_info = (await collection.index_information())
     nid_existing = next((i for n, i in nid_info.items() if i.get("key") == [("national_id", ASCENDING)]), None)
     if nid_existing and "partialFilterExpression" not in nid_existing:

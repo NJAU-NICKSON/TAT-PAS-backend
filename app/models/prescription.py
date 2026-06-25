@@ -3,7 +3,6 @@ from enum import Enum
 from typing import Optional, List
 from pydantic import BaseModel, ConfigDict, Field
 
-# Where a prescription was ordered from.
 class OrderSource(str, Enum):
     opd = "opd"
     ipd = "ipd"
@@ -14,7 +13,6 @@ class OrderSource(str, Enum):
     nicu = "nicu"
     discharge = "discharge"
 
-# Prescription priority levels.
 class Priority(str, Enum):
     stat = "stat"
     urgent = "urgent"
@@ -23,7 +21,6 @@ class Priority(str, Enum):
     nicu = "nicu"
     chemo = "chemo"
 
-# A single medication line.
 class MedicationItem(BaseModel):
     name: str
     dose: str
@@ -34,7 +31,6 @@ class MedicationItem(BaseModel):
     is_high_alert: bool = False
     is_controlled: bool = False
 
-# Prescription workflow states.
 class PrescriptionStatus(str, Enum):
     draft = "draft"
     submitted = "submitted"
@@ -45,20 +41,17 @@ class PrescriptionStatus(str, Enum):
     administered = "administered"
     archived = "archived"
 
-# Shared prescription fields.
 class PrescriptionBase(BaseModel):
     patient_id: str
     medications: List[MedicationItem]
     notes: Optional[str] = None
 
-# Fields for creating a prescription.
 class PrescriptionCreate(PrescriptionBase):
     visit_id: Optional[str] = None
     department_id: Optional[str] = None
     priority: Priority = Priority.routine
     order_source: OrderSource = OrderSource.opd
 
-# Fields for updating a prescription.
 class PrescriptionUpdate(BaseModel):
     status: Optional[PrescriptionStatus] = None
     notes: Optional[str] = None
@@ -73,7 +66,7 @@ class PrescriptionUpdate(BaseModel):
     amendment_note: Optional[str] = None
 
 
-# One immutable past version of a prescription's medications.
+# frozen snapshot kept on each amendment
 class PrescriptionRevision(BaseModel):
     medications: List[MedicationItem]
     notes: Optional[str] = None
@@ -81,7 +74,6 @@ class PrescriptionRevision(BaseModel):
     revised_by: Optional[str] = None
     reason: Optional[str] = None
 
-# Prescription as stored, with TAT fields.
 class PrescriptionInDB(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

@@ -6,7 +6,6 @@ from pydantic import BaseModel, ConfigDict
 ConsultationRoomStatus = Literal["available", "occupied", "cleaning", "reserved"]
 
 
-# Shared consultation-room fields.
 class ConsultationRoomBase(BaseModel):
     department_id: str
     room_number: str
@@ -15,7 +14,6 @@ class ConsultationRoomBase(BaseModel):
     notes: Optional[str] = None
 
 
-# Fields for creating a room.
 class ConsultationRoomCreate(ConsultationRoomBase):
     status: ConsultationRoomStatus = "available"
     current_doctor_id: Optional[str] = None
@@ -23,7 +21,6 @@ class ConsultationRoomCreate(ConsultationRoomBase):
     current_patient_id: Optional[str] = None
 
 
-# Fields for updating a room.
 class ConsultationRoomUpdate(BaseModel):
     status: Optional[ConsultationRoomStatus] = None
     current_doctor_id: Optional[str] = None
@@ -32,7 +29,6 @@ class ConsultationRoomUpdate(BaseModel):
     notes: Optional[str] = None
 
 
-# Room as stored in the database.
 class ConsultationRoomInDB(ConsultationRoomBase):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -45,12 +41,10 @@ class ConsultationRoomInDB(ConsultationRoomBase):
     updated_at: Optional[datetime] = None
 
 
-# Room returned by the API.
 class ConsultationRoomResponse(ConsultationRoomInDB):
     pass
 
 
-# Room with resolved doctor/nurse/patient names.
 class ConsultationRoomWithOccupants(ConsultationRoomInDB):
     department_name: Optional[str] = None
     current_doctor_name: Optional[str] = None

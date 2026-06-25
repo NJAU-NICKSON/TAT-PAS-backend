@@ -18,7 +18,7 @@ _HASH_EXCLUDE = {
 }
 
 
-# Normalize datetimes to millisecond precision so a value hashes the same
+# round to ms so the same value always hashes the same
 def _ms_truncate(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.replace(microsecond=(value.microsecond // 1000) * 1000).isoformat()
@@ -29,20 +29,20 @@ def _ms_truncate(value: Any) -> Any:
     return value
 
 
-# Stable JSON of the hashable subset of an audit doc.
+# canonical JSON of the fields we hash
 def _canonical_json(doc: dict) -> str:
     subset = {k: _ms_truncate(v) for k, v in doc.items() if k not in _HASH_EXCLUDE}
     safe = _make_snapshot_safe(subset)
     return json.dumps(safe, sort_keys=True, separators=(",", ":"), default=str)
 
 
-# SHA-256 of this record's immutable content chained to prev_hash.
+# sha-256 of prev_hash + this record's content
 def compute_record_hash(doc: dict, prev_hash: str) -> str:
     payload = prev_hash + "|" + _canonical_json(doc)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-# Insert an audit record with its hash-chain links set.
+# insert with prev_hash/record_hash links wired up
 async def _chained_insert(db: AsyncDatabase, doc: dict) -> dict:
     last = await db.audit_records.find(
         {"record_hash": {"$exists": True}}
@@ -63,7 +63,7 @@ async def _chained_insert(db: AsyncDatabase, doc: dict) -> dict:
     return doc
 
 
-# Convert a MongoDB document to a JSON-safe dict by stringifying ObjectIds.
+# stringify ObjectIds/dates so the doc is JSON-safe
 def _make_snapshot_safe(doc: Optional[dict]) -> Optional[dict]:
     if doc is None:
         return None
@@ -82,9 +82,7 @@ def _make_snapshot_safe(doc: Optional[dict]) -> Optional[dict]:
     return safe
 
 
-# Convert an audit document to a model.
 def _doc_to_audit(doc: dict) -> AuditRecordInDB:
-    # Stringify an ObjectId, passing through None.
     def _str(val) -> Optional[str]:
         if val is None:
             return None
@@ -136,7 +134,7 @@ def _doc_to_audit(doc: dict) -> AuditRecordInDB:
     )
 
 
-# Write a new audit record into the hash chain.
+# single entry point for appending to the chain
 async def create_audit_record(
     db: AsyncDatabase,
     prescription_id: str,
@@ -223,7 +221,7 @@ async def create_audit_record(
     return _doc_to_audit(doc)
 
 
-# Log a security event (e.g. failed login).
+# e.g. failed login, role change
 async def create_security_audit(
     db: AsyncDatabase,
     user_id: str,
@@ -250,7 +248,6 @@ async def create_security_audit(
         security_event_type=event_type,
     )
 
-# Attach rx_number and patient_name to audit docs in-place.
 async def _enrich_audit_docs(db: AsyncDatabase, docs: List[dict]) -> List[dict]:
     rx_ids = list({d["prescription_id"] for d in docs if d.get("prescription_id") and d["prescription_id"] != "system"})
     rx_map: Dict[str, str] = {}
@@ -286,7 +283,6 @@ async def _enrich_audit_docs(db: AsyncDatabase, docs: List[dict]) -> List[dict]:
     return docs
 
 
-# List audit records with filters and paging.
 async def get_audit_records(
     db: AsyncDatabase,
     prescription_id: Optional[str] = None,
@@ -312,7 +308,7 @@ async def get_audit_records(
     return [_doc_to_audit(doc) for doc in docs]
 
 
-# Return only original (non-resolution) unresolved flag records.
+# unresolved original flags only, skips resolution/countersign rows
 async def get_unresolved_audit_records(
     db: AsyncDatabase,
     skip: int = 0,
@@ -328,7 +324,7 @@ async def get_unresolved_audit_records(
     return [_doc_to_audit(doc) for doc in docs]
 
 
-# Full immutable audit log with all record types.
+# every record type, append-only
 async def get_audit_log(
     db: AsyncDatabase,
     skip: int = 0,
@@ -362,7 +358,6 @@ async def get_audit_log(
     return [_doc_to_audit(doc) for doc in docs]
 
 
-# Fetch one audit record by ID.
 async def get_audit_by_id(
     db: AsyncDatabase, audit_id: str
 ) -> Optional[AuditRecordInDB]:
@@ -376,7 +371,7 @@ async def get_audit_by_id(
     return _doc_to_audit(doc)
 
 
-# Create an immutable countersign record for a flag.
+# append a countersign row, never edits the original
 async def countersign_audit(
     db: AsyncDatabase,
     flag_id: str,
@@ -506,7 +501,7 @@ async def countersign_audit(
     return _doc_to_audit(countersign_doc)
 
 
-# Create resolution records for all open flags on a prescription.
+# resolve every open flag on the prescription
 async def resolve_audit_record(
     prescription_id: str,
     resolution_note: str,
@@ -636,7 +631,6 @@ async def resolve_audit_record(
     return resolution_records
 
 
-# True if the string is a valid ObjectId.
 def _is_valid_object_id(value: str) -> bool:
     try:
         ObjectId(value)
@@ -645,7 +639,6 @@ def _is_valid_object_id(value: str) -> bool:
         return False
 
 
-# List security events for a given day.
 async def get_security_events_for_day(
     db: AsyncDatabase,
     review_date: date,
@@ -663,7 +656,6 @@ async def get_security_events_for_day(
     return [_doc_to_audit(doc) for doc in docs]
 
 
-# Mark security events as reviewed.
 async def mark_events_reviewed(
     db: AsyncDatabase,
     event_ids: List[str],
@@ -685,7 +677,7 @@ async def mark_events_reviewed(
     return result.modified_count
 
 
-# Raise the severity of flags left open too long.
+# bump severity on flags sitting open too long
 async def escalate_overdue_flags(db: AsyncDatabase):
     from app.ws.manager import manager
 
@@ -774,7 +766,6 @@ async def escalate_overdue_flags(db: AsyncDatabase):
     return escalated_count
 
 
-# List open flags on a prescription.
 async def get_unresolved_for_prescription(
     prescription_id: str, db: AsyncDatabase
 ) -> List[AuditRecordInDB]:
@@ -787,7 +778,7 @@ async def get_unresolved_for_prescription(
     return [_doc_to_audit(doc) for doc in docs]
 
 
-# Walk the audit hash chain in creation order and report tampering.
+# walk the chain in order and report any broken links or edits
 async def verify_chain_integrity(db: AsyncDatabase) -> Dict[str, Any]:
     cursor = db.audit_records.find(
         {"record_hash": {"$exists": True}}
@@ -830,7 +821,134 @@ async def verify_chain_integrity(db: AsyncDatabase) -> Dict[str, Any]:
     }
 
 
-# One-time: assign prev_hash/record_hash to any records that lack them,
+async def verify_prescription_integrity(db: AsyncDatabase, identifier: str) -> Dict[str, Any]:
+    identifier = (identifier or "").strip()
+    prescription_id = identifier
+    rx_number = None
+
+    if not ObjectId.is_valid(identifier):
+        rx_doc = await db.prescriptions.find_one(
+            {"rx_number": identifier}, {"_id": 1, "rx_number": 1}
+        )
+        if not rx_doc:
+            return {
+                "found": False,
+                "identifier": identifier,
+                "intact": False,
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+            }
+        prescription_id = str(rx_doc["_id"])
+        rx_number = rx_doc.get("rx_number")
+
+    cursor = db.audit_records.find(
+        {"prescription_id": prescription_id}
+    ).sort([("created_at", 1), ("_id", 1)])
+    records = await cursor.to_list(length=None)
+
+    # hash the raw docs first; enrichment adds rx_number/patient_name which aren't hashed
+    verification = {}
+    for rec in records:
+        stored_hash = rec.get("record_hash")
+        if not stored_hash:
+            verification[rec["_id"]] = (False, None, "unchained")
+        else:
+            recomputed = compute_record_hash(rec, rec.get("prev_hash") or GENESIS_HASH)
+            if recomputed == stored_hash:
+                verification[rec["_id"]] = (True, recomputed, None)
+            else:
+                verification[rec["_id"]] = (False, recomputed, "content_modified")
+
+    records = await _enrich_audit_docs(db, records)
+
+    def _iso(val):
+        if val is None:
+            return None
+        return val.isoformat() if hasattr(val, "isoformat") else str(val)
+
+    def _str(val):
+        if val is None:
+            return None
+        return str(val)
+
+    issues: List[dict] = []
+    unchained = 0
+    trail: List[dict] = []
+
+    for rec in records:
+        rec_id = str(rec["_id"])
+        stored_hash = rec.get("record_hash")
+        prev_hash = rec.get("prev_hash")
+        verified, recomputed, problem = verification[rec["_id"]]
+
+        if problem == "unchained":
+            unchained += 1
+            issues.append({
+                "record_id": rec_id,
+                "problem": "unchained",
+                "detail": "Record has no hash and is not part of the tamper-evident chain.",
+            })
+        elif problem == "content_modified":
+            issues.append({
+                "record_id": rec_id,
+                "problem": "content_modified",
+                "detail": "record_hash does not match the content (a record was edited after creation).",
+            })
+
+        trail.append({
+            "id": rec_id,
+            "type": rec.get("type"),
+            "flag_code": rec.get("flag_code"),
+            "issue": rec.get("issue"),
+            "severity": rec.get("severity"),
+            "recommendation": rec.get("recommendation"),
+            "created_at": _iso(rec.get("created_at")),
+            "created_by": _str(rec.get("created_by")),
+            "created_by_role": rec.get("created_by_role"),
+            "drug_name": rec.get("drug_name"),
+            "dose": rec.get("dose"),
+            "patient_age": rec.get("patient_age"),
+            "patient_allergies_snapshot": rec.get("patient_allergies_snapshot", []),
+            "resolved": rec.get("resolved", False),
+            "resolved_by": _str(rec.get("resolved_by")),
+            "resolved_at": _iso(rec.get("resolved_at")),
+            "resolution_type": rec.get("resolution_type"),
+            "resolution_note": rec.get("resolution_note"),
+            "countersigned": rec.get("countersigned", False),
+            "countersigned_by": _str(rec.get("countersigned_by")),
+            "countersigned_at": _iso(rec.get("countersigned_at")),
+            "countersign_note": rec.get("countersign_note"),
+            "esig_required": rec.get("esig_required", False),
+            "is_security_event": rec.get("is_security_event", False),
+            "security_event_type": rec.get("security_event_type"),
+            "tat_pharmacy_min_at_flag": rec.get("tat_pharmacy_min_at_flag"),
+            "sla_threshold_min": rec.get("sla_threshold_min"),
+            "ip_address": rec.get("ip_address"),
+            "user_agent": rec.get("user_agent"),
+            "rx_number": rec.get("rx_number"),
+            "patient_name": rec.get("patient_name"),
+            "prev_hash": prev_hash,
+            "record_hash": stored_hash,
+            "recomputed_hash": recomputed,
+            "verified": verified,
+            "problem": problem,
+        })
+
+    return {
+        "found": True,
+        "identifier": identifier,
+        "prescription_id": prescription_id,
+        "rx_number": rx_number or (trail[0]["rx_number"] if trail else None),
+        "patient_name": trail[0]["patient_name"] if trail else None,
+        "intact": len(issues) == 0 and len(records) > 0,
+        "record_count": len(records),
+        "unchained_records": unchained,
+        "issues": issues,
+        "trail": trail,
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# one-time backfill for rows created before the chain existed
 async def backfill_hash_chain(db: AsyncDatabase) -> Dict[str, Any]:
     cursor = db.audit_records.find({}).sort([("created_at", 1), ("_id", 1)])
     records = await cursor.to_list(length=None)

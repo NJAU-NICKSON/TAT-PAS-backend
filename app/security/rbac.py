@@ -9,7 +9,7 @@ from app.db.client import get_database
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
 
 
-# The system's user roles.
+# user roles
 class Roles(str, Enum):
     receptionist = "receptionist"
     nurse = "nurse"
@@ -33,7 +33,7 @@ NURSING_ROLES = [
 ADMIN_ROLES = [Roles.admin]
 
 
-# Resolve the logged-in user from the request's JWT.
+# pull the current user off the request JWT
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncDatabase = Depends(get_database),
@@ -75,9 +75,8 @@ async def get_current_user(
     return UserInDB(**user_doc)
 
 
-# Dependency that allows only the given roles.
+# gate a route to the given roles
 def require_roles(*roles: Roles):
-    # Role-check dependency used by the require_* helpers.
     async def dependency(
         current_user=Depends(get_current_user),
     ):
@@ -91,16 +90,16 @@ def require_roles(*roles: Roles):
     return dependency
 
 
-# Allow any clinical staff role (doctor, nurse, etc.).
+# clinical staff + admin
 def require_any_clinical_role():
     return require_roles(*CLINICAL_ROLES, Roles.admin)
 
 
-# Allow nurses and admins only.
+# nursing roles + admin
 def require_any_nursing_role():
     return require_roles(*NURSING_ROLES, Roles.admin)
 
 
-# Allow admins only.
+# admin only
 def require_admin():
     return require_roles(Roles.admin)

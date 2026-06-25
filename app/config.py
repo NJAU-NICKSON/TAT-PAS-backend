@@ -4,7 +4,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator
 
 
-# App configuration loaded from environment/.env.
 class Settings(BaseSettings):
     MONGO_URI: str  
     MONGO_DB: str = "tatpas"
@@ -16,14 +15,14 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Split a comma-separated CORS origins string.
+    # accept a comma-separated string for origins
     @field_validator("ALLOWED_ORIGINS", mode="before")
     @classmethod
     def parse_allowed_origins(cls, v):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",") if origin.strip()]
         return v
-# Return the cached app settings.
+# cached so we build it once
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()

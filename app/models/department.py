@@ -3,14 +3,12 @@ from typing import Optional, List
 from pydantic import BaseModel, ConfigDict, Field
 
 
-# A sub-area within a department.
 class SubArea(BaseModel):
     name: str
     code: Optional[str] = None
     description: Optional[str] = None
 
 
-# Shared department fields.
 class DepartmentBase(BaseModel):
     name: str
     code: str
@@ -24,12 +22,10 @@ class DepartmentBase(BaseModel):
     bed_count: Optional[int] = None
 
 
-# Fields for creating a department.
 class DepartmentCreate(DepartmentBase):
     head_user_id: Optional[str] = None
 
 
-# Fields for updating a department.
 class DepartmentUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
@@ -42,7 +38,6 @@ class DepartmentUpdate(BaseModel):
     bed_count: Optional[int] = None
 
 
-# Department as stored in the database.
 class DepartmentInDB(DepartmentBase):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -52,12 +47,10 @@ class DepartmentInDB(DepartmentBase):
     updated_at: Optional[datetime] = None
 
 
-# Department returned by the API.
 class DepartmentResponse(DepartmentInDB):
     pass
 
 
-# Department plus its bed availability.
 class DepartmentWithBedSummary(DepartmentInDB):
     total_beds: int = 0
     available_beds: int = 0
