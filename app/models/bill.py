@@ -87,7 +87,7 @@ class BillUpdate(BaseModel):
 # Bill as stored in the database.
 class BillInDB(BillBase):
     id: PyObjectId = Field(default_factory=PyObjectId, alias="_id")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = None
     created_by: Optional[str] = None
 

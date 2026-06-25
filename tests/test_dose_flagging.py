@@ -54,7 +54,7 @@ async def test_child_safe_dose_not_flagged():
 # The same dose is fine for an adult (adult band has a higher ceiling).
 async def test_adult_dose_allowed():
     adult = {"dob": _dob(40), "weight_kg": 70}
-    med = {"name": "Paracetamol", "dose": "1g", "frequency": "QDS"}  # 4000/day, adult ceiling
+    med = {"name": "Paracetamol", "dose": "1g", "frequency": "QDS"}  
     assert await f.check_dose_for_age(med, adult, LIMITS) == []
 
 

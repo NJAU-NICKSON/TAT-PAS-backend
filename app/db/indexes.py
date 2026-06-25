@@ -53,8 +53,19 @@ async def create_indexes(db: AsyncDatabase) -> None:
     collection = db.patients
     if not await index_exists(collection, [("mrn", ASCENDING)]):
         await collection.create_index("mrn", unique=True)
-    if not await index_exists(collection, [("national_id", ASCENDING)]):
-        await collection.create_index("national_id", unique=True, sparse=True)
+    # Unique only when national_id is a real string; a sparse index still collides on explicit nulls (minors).
+    nid_info = (await collection.index_information())
+    nid_existing = next((i for n, i in nid_info.items() if i.get("key") == [("national_id", ASCENDING)]), None)
+    if nid_existing and "partialFilterExpression" not in nid_existing:
+        await collection.drop_index(next(n for n, i in nid_info.items() if i.get("key") == [("national_id", ASCENDING)]))
+        nid_existing = None
+    if not nid_existing:
+        await collection.create_index(
+            "national_id",
+            unique=True,
+            partialFilterExpression={"national_id": {"$type": "string"}},
+            name="national_id_unique",
+        )
     if not await index_exists(collection, [("guardian_national_id", ASCENDING)]):
         await collection.create_index("guardian_national_id", sparse=True)
     if not await index_exists(collection, [("last_name", ASCENDING), ("first_name", ASCENDING)]):

@@ -168,8 +168,9 @@ async def create_audit_record(
 
     high_severity_clinical_types = {AuditSeverity.high.value, AuditSeverity.critical.value}
     clinical_flag_codes = {
-        "allergy_match", "drug_interaction", "controlled_sub",
-        "high_dose", "extended_duration", "duplicate_rx",
+        "allergy_match", "drug_drug_interaction", "controlled_substance",
+        "high_dose", "extended_duration", "duplicate_active_rx",
+        "age_restriction", "neonatal_rx", "pregnancy_risk",
     }
     requires_countersign = (
         severity in high_severity_clinical_types

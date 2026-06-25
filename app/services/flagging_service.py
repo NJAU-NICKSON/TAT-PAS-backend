@@ -28,13 +28,13 @@ _DOSE_LIMITS = {
     "furosemide":   {"adult_max_single_mg": 80,   "max_mg_per_kg_day": 6,   "abs_max_mg_day": 600},
 }
 
-# Doses per day implied by a frequency code, for mg/kg/day calculations.
+# Doses per day implied by a frequency code or label, for mg/kg/day calculations.
 _FREQ_PER_DAY = {
-    "od": 1, "daily": 1, "qd": 1,
-    "bd": 2, "bid": 2,
-    "tds": 3, "tid": 3,
-    "qds": 4, "qid": 4,
-    "prn": 1,
+    "od": 1, "daily": 1, "qd": 1, "once daily": 1,
+    "bd": 2, "bid": 2, "twice daily": 2,
+    "tds": 3, "tid": 3, "three times daily": 3,
+    "qds": 4, "qid": 4, "four times daily": 4,
+    "prn": 1, "as needed": 1,
 }
 
 
@@ -48,6 +48,10 @@ def _parse_mg(dose: str) -> Optional[float]:
     mg = re.search(r"(\d+(?:\.\d+)?)\s*mg", dose, re.IGNORECASE)
     if mg:
         return float(mg.group(1))
+    # A bare number with no unit is treated as milligrams (the form's default unit).
+    bare = re.fullmatch(r"\s*(\d+(?:\.\d+)?)\s*", dose)
+    if bare:
+        return float(bare.group(1))
     return None
 
 

@@ -128,10 +128,10 @@ def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
 
     return PrescriptionInDB(
         id=str(doc["_id"]),
-        patient_id=_str(doc["patient_id"]) or "",
-        doctor_id=_str(doc["doctor_id"]) or "",
+        patient_id=_str(doc.get("patient_id")) or "",
+        doctor_id=_str(doc.get("doctor_id")) or "",
         medications=medications,
-        status=doc["status"],
+        status=doc.get("status", "submitted"),
         priority=priority,
         order_source=order_source,
         ordered_at=doc.get("ordered_at"),
@@ -142,8 +142,8 @@ def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
         flags=doc.get("flags", []),
         notes=doc.get("notes"),
         pharmacist_comment=doc.get("pharmacist_comment"),
-        created_at=doc["created_at"],
-        updated_at=doc["updated_at"],
+        created_at=doc.get("created_at") or doc.get("ordered_at"),
+        updated_at=doc.get("updated_at") or doc.get("created_at") or doc.get("ordered_at"),
         tat_order_to_submit_min=doc.get("tat_order_to_submit_min"),
         tat_submit_to_verify_min=doc.get("tat_submit_to_verify_min"),
         tat_flag_hold_min=doc.get("tat_flag_hold_min"),
@@ -178,6 +178,8 @@ def _doc_to_prescription(doc: dict) -> PrescriptionInDB:
         weight_kg=doc.get("weight_kg"),
         patient_name=doc.get("patient_name"),
         doctor_name=doc.get("doctor_name"),
+        department=doc.get("department"),
+        ward_location=doc.get("ward_location"),
     )
 
 
@@ -207,9 +209,35 @@ async def _enrich_docs_with_names(db: AsyncDatabase, docs: List[dict]) -> List[d
             async for udoc in cursor:
                 user_map[str(udoc["_id"])] = udoc.get("full_name") or udoc.get("username") or ""
 
+    # Resolve department and ward names from each prescription's linked visit.
+    visit_ids = list({str(d["visit_id"]) for d in docs if d.get("visit_id")})
+    visit_map: Dict[str, dict] = {}
+    dept_ids: set = set()
+    if visit_ids:
+        valid_vids = [ObjectId(vid) for vid in visit_ids if ObjectId.is_valid(vid)]
+        if valid_vids:
+            async for vdoc in db.visits.find(
+                {"_id": {"$in": valid_vids}},
+                {"department_id": 1, "bed_label": 1, "ward_name": 1},
+            ):
+                visit_map[str(vdoc["_id"])] = vdoc
+                if vdoc.get("department_id"):
+                    dept_ids.add(str(vdoc["department_id"]))
+
+    dept_map: Dict[str, str] = {}
+    if dept_ids:
+        valid_dids = [ObjectId(did) for did in dept_ids if ObjectId.is_valid(did)]
+        if valid_dids:
+            async for ddoc in db.departments.find({"_id": {"$in": valid_dids}}, {"name": 1}):
+                dept_map[str(ddoc["_id"])] = ddoc.get("name") or ""
+
     for doc in docs:
         doc["patient_name"] = patient_map.get(str(doc.get("patient_id")), "")
         doc["doctor_name"] = user_map.get(str(doc.get("doctor_id")), "")
+        vdoc = visit_map.get(str(doc.get("visit_id"))) if doc.get("visit_id") else None
+        if vdoc:
+            doc["department"] = dept_map.get(str(vdoc.get("department_id")), "") or None
+            doc["ward_location"] = vdoc.get("ward_name") or vdoc.get("bed_label") or None
         if doc.get("dispensed_by_id") and not doc.get("dispensed_by_name"):
             doc["dispensed_by_name"] = user_map.get(str(doc["dispensed_by_id"]), "")
         if doc.get("administered_by_id") and not doc.get("administered_by_name"):
@@ -244,6 +272,32 @@ async def generate_rx_number(db: AsyncDatabase) -> str:
     prefix = f"RX-{year}-"
     if await db.prescriptions.find_one({"rx_number": f"{prefix}{seq:04d}"}, {"_id": 1}):
         count = await db.prescriptions.count_documents({"rx_number": {"$regex": f"^{prefix}"}})
+        seq = count + 1
+        await db.counters.update_one(
+            {"_id": counter_id},
+            {"$set": {"seq": seq}},
+            upsert=True,
+        )
+
+    return f"{prefix}{seq:04d}"
+
+
+# Generate a unique dispensing receipt number (e.g. RCP-2026-0042).
+async def generate_receipt_number(db: AsyncDatabase) -> str:
+    year = datetime.now(timezone.utc).strftime("%Y")
+    counter_id = f"receipt_{year}"
+
+    result = await db.counters.find_one_and_update(
+        {"_id": counter_id},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    seq = result.get("seq", 1)
+
+    prefix = f"RCP-{year}-"
+    if await db.prescriptions.find_one({"receipt_number": f"{prefix}{seq:04d}"}, {"_id": 1}):
+        count = await db.prescriptions.count_documents({"receipt_number": {"$regex": f"^{prefix}"}})
         seq = count + 1
         await db.counters.update_one(
             {"_id": counter_id},
@@ -301,6 +355,20 @@ async def create_prescription(
             {"_id": ObjectId(prescription.visit_id)},
             {"$addToSet": {"prescription_ids": str(result.inserted_id)}},
         )
+        # Inherit the visit's department/ward when the order didn't specify one.
+        if not prescription.department_id:
+            vdoc = await db.visits.find_one(
+                {"_id": ObjectId(prescription.visit_id)},
+                {"department_id": 1, "bed_id": 1},
+            )
+            inherited: dict = {}
+            if vdoc and vdoc.get("department_id"):
+                inherited["department_id"] = str(vdoc["department_id"])
+            if vdoc and vdoc.get("bed_id"):
+                inherited["ward_id"] = str(vdoc["bed_id"])
+            if inherited:
+                await db.prescriptions.update_one({"_id": result.inserted_id}, {"$set": inherited})
+                doc.update(inherited)
 
     event = {
         "event_type": "prescription.created",
@@ -377,6 +445,20 @@ async def get_prescription_queue(
         _ensure_aware(p.submitted_at) or datetime.now(timezone.utc),
     ))
     return results
+
+
+# Prescriptions a given pharmacist has dispensed, newest first (for reprinting receipts).
+async def get_dispensed_by(
+    db: AsyncDatabase,
+    pharmacist_id: str,
+    skip: int = 0,
+    limit: int = 50,
+) -> List[PrescriptionInDB]:
+    query = {"dispensed_by_id": pharmacist_id, "dispensed_at": {"$ne": None}}
+    docs_cursor = db.prescriptions.find(query).sort([("dispensed_at", -1)]).skip(skip).limit(limit)
+    docs = await docs_cursor.to_list(length=limit)
+    docs = await _enrich_docs_with_names(db, docs)
+    return [_doc_to_prescription(doc) for doc in docs]
 
 
 # Fetch one prescription by ID.
@@ -460,6 +542,11 @@ async def advance_status(
         return None
 
     current_status = old_doc["status"]
+
+    # Idempotent: a repeat action (e.g. double-click) on an already-current status is a no-op success.
+    if current_status == new_status:
+        return _doc_to_prescription(old_doc)
+
     now = datetime.now(timezone.utc)
     set_fields: dict = {"status": new_status, "updated_at": now}
 
@@ -475,8 +562,8 @@ async def advance_status(
         set_fields["administered_route"] = update_data["administered_route"]
     if update_data.get("administration_notes") is not None:
         set_fields["administration_notes"] = update_data["administration_notes"]
-    if update_data.get("receipt_number") is not None:
-        set_fields["receipt_number"] = update_data["receipt_number"]
+    if update_data.get("receipt_number"):
+        set_fields["receipt_number"] = update_data["receipt_number"].strip()
 
     if role == "admin":
         # Admin observes; the only state change it may perform is archiving, as clinical transitions belong to clinical roles.
@@ -596,6 +683,9 @@ async def advance_status(
     elif new_status == "dispensed":
         set_fields["dispensed_at"] = now
         set_fields["dispensed_by_id"] = user_id
+        # Auto-generate the dispensing receipt number unless one is already on record.
+        if not old_doc.get("receipt_number") and not set_fields.get("receipt_number"):
+            set_fields["receipt_number"] = await generate_receipt_number(db)
         verified_at = _ensure_aware(old_doc.get("verified_at"))
         submitted_at = _ensure_aware(old_doc.get("submitted_at"))
 

@@ -14,7 +14,6 @@ def _record(issue, n):
         "created_at": datetime(2026, 6, 1, 8, n, tzinfo=timezone.utc),
     }
 
-
 # The same record + prev_hash always produces the same hash (deterministic).
 def test_hash_is_deterministic():
     rec = _record("status changed", 1)

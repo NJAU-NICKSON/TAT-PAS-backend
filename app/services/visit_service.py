@@ -128,19 +128,31 @@ async def create_visit(data: VisitCreate, created_by_id: str, db: AsyncDatabase)
     return VisitResponse(**doc)
 
 
+# Look up a patient's display name and blood group.
+async def _get_patient_summary(db: AsyncDatabase, patient_id: str) -> tuple[Optional[str], Optional[str]]:
+    if not patient_id or not ObjectId.is_valid(patient_id):
+        return None, None
+    pdoc = await db.patients.find_one(
+        {"_id": ObjectId(patient_id)},
+        {"first_name": 1, "last_name": 1, "blood_group": 1},
+    )
+    if not pdoc:
+        return None, None
+    name = f"{pdoc.get('first_name', '')} {pdoc.get('last_name', '')}".strip() or None
+    return name, pdoc.get("blood_group")
+
+
 # Look up a patient's display name.
 async def _get_patient_name(db: AsyncDatabase, patient_id: str) -> Optional[str]:
-    if not patient_id or not ObjectId.is_valid(patient_id):
-        return None
-    pdoc = await db.patients.find_one({"_id": ObjectId(patient_id)}, {"first_name": 1, "last_name": 1})
-    if not pdoc:
-        return None
-    return f"{pdoc.get('first_name', '')} {pdoc.get('last_name', '')}".strip() or None
+    name, _ = await _get_patient_summary(db, patient_id)
+    return name
 
 
 # Attach patient_name and actor names to a visit document.
 async def _enrich_visit_doc(doc: dict, db: AsyncDatabase) -> dict:
-    doc["patient_name"] = await _get_patient_name(db, str(doc.get("patient_id", "")))
+    name, blood_group = await _get_patient_summary(db, str(doc.get("patient_id", "")))
+    doc["patient_name"] = name
+    doc["patient_blood_group"] = blood_group
 
     if doc.get("assigned_doctor_id") and not doc.get("assigned_doctor_name"):
         doc["assigned_doctor_name"] = await _get_user_name(db, str(doc["assigned_doctor_id"]))
@@ -150,6 +162,19 @@ async def _enrich_visit_doc(doc: dict, db: AsyncDatabase) -> dict:
         doc["registered_by_name"] = await _get_user_name(db, str(doc["registered_by_id"]))
     if doc.get("consultation_nurse_id") and not doc.get("consultation_nurse_name"):
         doc["consultation_nurse_name"] = await _get_user_name(db, str(doc["consultation_nurse_id"]))
+
+    # Fall back to the doctor's consultation-room nurse/room when the visit has none on record.
+    if doc.get("assigned_doctor_id") and (not doc.get("consultation_nurse_id") or not doc.get("consultation_room")):
+        room = await db.consultation_rooms.find_one(
+            {"current_doctor_id": str(doc["assigned_doctor_id"])},
+            {"current_nurse_id": 1, "room_name": 1},
+        )
+        if room:
+            if not doc.get("consultation_nurse_id") and room.get("current_nurse_id"):
+                doc["consultation_nurse_id"] = str(room["current_nurse_id"])
+                doc["consultation_nurse_name"] = await _get_user_name(db, str(room["current_nurse_id"]))
+            if not doc.get("consultation_room") and room.get("room_name"):
+                doc["consultation_room"] = room["room_name"]
 
     if doc.get("bed_id") and not doc.get("bed_label"):
         try:
@@ -211,18 +236,29 @@ async def list_visits(
             date_filter["$lte"] = date_to
         query["registered_at"] = date_filter
 
-    # Doctors and nurses see only their assigned patients (nurses also see the shared triage queue); other roles keep full visibility.
+    # Doctors and nurses see only their assigned visits; the shared intake queue is added only when a status is requested.
     if scope_role == "doctor" and scope_user_id:
-        query["$or"] = [
-            {"assigned_doctor_id": scope_user_id},
-            {"assigned_doctor_id": {"$in": [None, ""]}, "status": "waiting_for_doctor"},
-        ]
+        clauses: list[dict] = [{"assigned_doctor_id": scope_user_id}]
+        if status:
+            clauses.append({"assigned_doctor_id": {"$in": [None, ""]}, "status": "waiting_for_doctor"})
+        query["$or"] = clauses
     elif scope_role == "nurse" and scope_user_id:
-        query["$or"] = [
+        clauses = [
             {"triage_nurse_id": scope_user_id},
             {"consultation_nurse_id": scope_user_id},
-            {"triage_nurse_id": {"$in": [None, ""]}, "status": {"$in": ["registered", "triaged", "waiting_for_doctor"]}},
         ]
+        if status:
+            # Intake queue: unassigned patients, scoped to this nurse's doctor (or with no doctor yet).
+            my_doctor_id = await _nurse_doctor_id(db, scope_user_id)
+            doctor_match = [{"assigned_doctor_id": {"$in": [None, ""]}}]
+            if my_doctor_id:
+                doctor_match.append({"assigned_doctor_id": my_doctor_id})
+            clauses.append({
+                "triage_nurse_id": {"$in": [None, ""]},
+                "status": {"$in": ["registered", "triaged", "waiting_for_doctor"]},
+                "$or": doctor_match,
+            })
+        query["$or"] = clauses
 
     cursor = db.visits.find(query).sort([("registered_at", -1)]).skip(skip).limit(limit)
     docs = []
@@ -233,14 +269,18 @@ async def list_visits(
     pid_set = list({str(d.get("patient_id", "")) for d in docs if d.get("patient_id")})
     valid_pids = [ObjectId(pid) for pid in pid_set if ObjectId.is_valid(pid)]
     patient_map: dict = {}
+    blood_map: dict = {}
     if valid_pids:
-        async for pdoc in db.patients.find({"_id": {"$in": valid_pids}}, {"first_name": 1, "last_name": 1}):
+        async for pdoc in db.patients.find({"_id": {"$in": valid_pids}}, {"first_name": 1, "last_name": 1, "blood_group": 1}):
             name = f"{pdoc.get('first_name', '')} {pdoc.get('last_name', '')}".strip()
             patient_map[str(pdoc["_id"])] = name or None
+            blood_map[str(pdoc["_id"])] = pdoc.get("blood_group")
 
     visits = []
     for doc in docs:
-        doc["patient_name"] = patient_map.get(str(doc.get("patient_id", "")))
+        pid = str(doc.get("patient_id", ""))
+        doc["patient_name"] = patient_map.get(pid)
+        doc["patient_blood_group"] = blood_map.get(pid)
         visits.append(VisitResponse(**doc))
     return visits
 
@@ -296,6 +336,18 @@ async def update_visit(visit_id: str, data: VisitUpdate, user_id: str, db: Async
         existing = await db.visits.find_one({"_id": obj_id}, {"doctor_assigned_at": 1})
         if not (existing and existing.get("doctor_assigned_at")):
             update_fields["doctor_assigned_at"] = now
+
+        # Derive the doctor's assisting nurse (and room) from their consultation room unless set explicitly.
+        if data.consultation_nurse_id is None:
+            room = await db.consultation_rooms.find_one(
+                {"current_doctor_id": data.assigned_doctor_id},
+                {"current_nurse_id": 1, "room_name": 1},
+            )
+            if room and room.get("current_nurse_id"):
+                update_fields["consultation_nurse_id"] = str(room["current_nurse_id"])
+                update_fields["consultation_nurse_name"] = await _get_user_name(db, str(room["current_nurse_id"]))
+            if room and data.consultation_room is None and room.get("room_name"):
+                update_fields["consultation_room"] = room["room_name"]
 
     if data.chief_complaint is not None:
         update_fields["chief_complaint"] = data.chief_complaint
@@ -391,12 +443,36 @@ async def start_triage(visit_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
     return VisitResponse(**result)
 
 
+# The doctor a nurse is paired with, via their consultation room.
+async def _nurse_doctor_id(db: AsyncDatabase, nurse_id: str) -> Optional[str]:
+    room = await db.consultation_rooms.find_one(
+        {"current_nurse_id": nurse_id}, {"current_doctor_id": 1}
+    )
+    return str(room["current_doctor_id"]) if room and room.get("current_doctor_id") else None
+
+
 # Record triage vitals and move the visit forward.
 async def triage_visit(visit_id: str, data: TriageSubmit, nurse_id: str, db: AsyncDatabase) -> Optional[VisitInDB]:
     try:
         obj_id = ObjectId(visit_id)
     except Exception:
         return None
+
+    existing = await db.visits.find_one(
+        {"_id": obj_id},
+        {"assigned_doctor_id": 1, "triage_nurse_id": 1, "status": 1},
+    )
+    if not existing:
+        return None
+
+    # A nurse may only triage a patient assigned to their own doctor (the doctor in their consultation room).
+    my_doctor_id = await _nurse_doctor_id(db, nurse_id)
+    visit_doctor_id = existing.get("assigned_doctor_id")
+    if visit_doctor_id and str(visit_doctor_id) != str(my_doctor_id or ""):
+        raise HTTPException(
+            status_code=403,
+            detail="This patient is assigned to another doctor's team and cannot be triaged by you.",
+        )
 
     now = datetime.now(timezone.utc)
     nurse_name = await _get_user_name(db, nurse_id)
@@ -422,6 +498,15 @@ async def triage_visit(visit_id: str, data: TriageSubmit, nurse_id: str, db: Asy
     )
     if not result:
         return None
+
+    # Mirror the triage weight onto the patient so the dosing/flagging engine can use it.
+    weight = data.vitals.weight_kg
+    if weight and result.get("patient_id") and ObjectId.is_valid(str(result["patient_id"])):
+        await db.patients.update_one(
+            {"_id": ObjectId(str(result["patient_id"]))},
+            {"$set": {"weight_kg": weight, "updated_at": now}},
+        )
+
     result["id"] = str(result["_id"])
     result = await _enrich_visit_doc(result, db)
     return VisitResponse(**result)

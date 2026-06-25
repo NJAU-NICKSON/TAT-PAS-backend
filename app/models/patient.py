@@ -57,12 +57,28 @@ def _is_adult(dob: Optional[datetime]) -> bool:
     return age is None or age >= 18
 
 
+# Reject a date of birth in the future.
+def _validate_dob_not_future(v: Optional[datetime]) -> Optional[datetime]:
+    if v is None:
+        return v
+    today = date.today()
+    dob_date = v.date() if isinstance(v, datetime) else v
+    if dob_date > today:
+        raise ValueError("Date of birth cannot be in the future")
+    return v
+
+
 # Shared patient fields.
 class PatientBase(BaseModel):
     first_name: str
     last_name: str
     middle_name: Optional[str] = None
     dob: Optional[datetime] = None
+
+    @field_validator("dob")
+    @classmethod
+    def _dob_not_future(cls, v: Optional[datetime]) -> Optional[datetime]:
+        return _validate_dob_not_future(v)
     gender: Optional[Literal["male", "female", "other"]] = None
     blood_group: Optional[Literal["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", "unknown"]] = None
     weight_kg: Optional[float] = None
@@ -110,6 +126,11 @@ class PatientUpdate(BaseModel):
     last_name: Optional[str] = None
     middle_name: Optional[str] = None
     dob: Optional[datetime] = None
+
+    @field_validator("dob")
+    @classmethod
+    def _dob_not_future(cls, v: Optional[datetime]) -> Optional[datetime]:
+        return _validate_dob_not_future(v)
     gender: Optional[Literal["male", "female", "other"]] = None
     blood_group: Optional[Literal["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-", "unknown"]] = None
     weight_kg: Optional[float] = None
@@ -182,12 +203,14 @@ class PatientSummary(BaseModel):
     blood_group: Optional[str] = None
     national_id: Optional[str] = None
     guardian_national_id: Optional[str] = None
+    guardian_name: Optional[str] = None
     contact: Optional[ContactInfo] = None
     is_pregnant: bool = False
     is_paediatric: bool = False
     is_neonate: bool = False
     allergies_count: int = 0
     has_allergies: bool = False
+    created_at: Optional[datetime] = None
 
 
 # A patient search hit.

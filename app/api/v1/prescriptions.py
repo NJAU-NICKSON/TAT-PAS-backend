@@ -17,6 +17,7 @@ from app.services.prescription_service import (
     get_prescription_by_id,
     get_prescription_history,
     get_prescription_queue,
+    get_dispensed_by,
     get_prescriptions,
     run_automated_checks,
     _doc_to_prescription,
@@ -45,6 +46,60 @@ async def prescription_queue(
     return await get_prescription_queue(db, skip=skip, limit=limit, role=current_user.role)
 
 
+# Prescriptions the current pharmacist has dispensed, for reprinting receipts.
+@router.get("/dispensed-by-me", response_model=list[PrescriptionInDB])
+async def dispensed_by_me(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=200),
+    current_user=Depends(require_roles(Roles.pharmacist, Roles.admin)),
+    db: AsyncDatabase = Depends(get_database),
+):
+    return await get_dispensed_by(db, current_user.id, skip=skip, limit=limit)
+
+
+# Run safety checks on a prescription's medications and raise/flag any issues. Returns True if anything flagged.
+async def _run_safety_checks(db, prescription_id, medications, patient_id, created_by, created_by_role, ip, ua) -> bool:
+    from bson import ObjectId as _OID
+    checks = run_automated_checks({"medications": medications})
+
+    patient_doc = None
+    if patient_id and _OID.is_valid(patient_id):
+        patient_doc = await db.patients.find_one({"_id": _OID(patient_id)})
+    if patient_doc:
+        active_rxs = await db.prescriptions.find({
+            "patient_id": patient_id,
+            "status": {"$in": ["submitted", "verified", "flagged"]},
+            "_id": {"$ne": _OID(prescription_id)},
+        }).to_list(length=50)
+        advanced = await flagging_service.check_all_rules({"medications": medications}, patient_doc, active_rxs, db)
+        existing = {c.get("flag_code") for c in checks}
+        for f in advanced:
+            if f.code not in existing:
+                checks.append({"issue": f.issue, "severity": f.severity.value if hasattr(f.severity, "value") else str(f.severity),
+                               "recommendation": f.recommendation, "flag_code": f.code, "drug_name": f.drug_name, "dose": f.dose})
+                existing.add(f.code)
+
+    from app.models.patient import compute_age
+    patient_age = compute_age((patient_doc or {}).get("dob")) if patient_doc else None
+
+    already = set(await db.audit_records.distinct("flag_code", {"prescription_id": prescription_id, "type": "automated"}))
+    flagged_any = False
+    for check in checks:
+        code = check.get("flag_code", "generic")
+        if code in already:
+            continue
+        already.add(code)
+        await create_audit_record(
+            db=db, prescription_id=prescription_id, created_by=created_by, created_by_role=created_by_role,
+            audit_type="automated", issue=check["issue"], severity=check["severity"],
+            recommendation=check["recommendation"], flag_code=code, patient_age=patient_age,
+            drug_name=check.get("drug_name"), dose=check.get("dose"), ip_address=ip, user_agent=ua,
+        )
+        await add_flag(db, prescription_id, code, ip_address=ip, user_agent=ua)
+        flagged_any = True
+    return flagged_any
+
+
 # Create a prescription and run safety checks.
 @router.post("/", response_model=PrescriptionInDB, status_code=status.HTTP_201_CREATED)
 async def create_prescription_endpoint(
@@ -68,7 +123,7 @@ async def create_prescription_endpoint(
             active_rxs_cursor = db.prescriptions.find({
                 "patient_id": body.patient_id,
                 "status": {"$in": ["submitted", "verified", "flagged"]},
-                "id": {"$ne": prescription.id},
+                "_id": {"$ne": ObjectId(prescription.id)},
             })
             active_rxs = await active_rxs_cursor.to_list(length=50)
             rx_dict = {"medications": [m.model_dump() for m in body.medications]}
@@ -277,6 +332,18 @@ async def update_prescription_status(
     )
     if not updated:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prescription not found.")
+
+    # Re-run safety checks when a doctor resubmits amended medications.
+    if body.status.value == "submitted" and body.medications is not None:
+        await _run_safety_checks(
+            db, prescription_id, update_data["medications"], updated.patient_id,
+            current_user.id, current_user.role,
+            request.client.host if request.client else None,
+            request.headers.get("user-agent"),
+        )
+        refreshed = await get_prescription_by_id(db, prescription_id)
+        if refreshed:
+            updated = refreshed
 
     await log_action(
         db, action=f"prescription_{body.status.value}", user_id=current_user.id,

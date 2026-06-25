@@ -165,3 +165,4 @@ class VisitInDB(VisitBase):
 # Visit returned by the API.
 class VisitResponse(VisitInDB):
     patient_name: Optional[str] = None
+    patient_blood_group: Optional[str] = None

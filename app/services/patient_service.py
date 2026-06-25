@@ -86,12 +86,14 @@ def _doc_to_summary(doc: dict) -> PatientSummary:
         blood_group=doc.get("blood_group"),
         national_id=doc.get("national_id"),
         guardian_national_id=doc.get("guardian_national_id"),
+        guardian_name=doc.get("guardian_name"),
         contact=doc.get("contact"),
         is_pregnant=doc.get("is_pregnant", False),
         is_paediatric=doc.get("is_paediatric", False),
         is_neonate=doc.get("is_neonate", False),
         allergies_count=len(allergies),
         has_allergies=len(allergies) > 0,
+        created_at=doc.get("created_at"),
     )
 
 
@@ -209,28 +211,31 @@ async def find_id_duplicate(
 
 
 # Return an existing patient that looks like the same person, or None.
+# Requires a name match (with dob or phone) - a shared phone alone is not a
+# duplicate, since families and guardians legitimately share contact numbers.
 async def find_potential_duplicate(
     db: AsyncDatabase, patient: PatientCreate
 ) -> Optional[dict]:
-    or_clauses: list[dict] = []
-
-    if patient.first_name and patient.last_name:
-        name_dob: dict = {
-            "first_name": {"$regex": f"^{re.escape(patient.first_name.strip())}$", "$options": "i"},
-            "last_name": {"$regex": f"^{re.escape(patient.last_name.strip())}$", "$options": "i"},
-        }
-        if patient.dob:
-            name_dob["dob"] = patient.dob
-        or_clauses.append(name_dob)
-
-    phone = patient.contact.phone if patient.contact else None
-    if phone and phone.strip():
-        or_clauses.append({"contact.phone": phone.strip()})
-
-    if not or_clauses:
+    if not (patient.first_name and patient.last_name):
         return None
 
-    return await db.patients.find_one({"$or": or_clauses})
+    name_match: dict = {
+        "first_name": {"$regex": f"^{re.escape(patient.first_name.strip())}$", "$options": "i"},
+        "last_name": {"$regex": f"^{re.escape(patient.last_name.strip())}$", "$options": "i"},
+    }
+
+    phone = patient.contact.phone.strip() if patient.contact and patient.contact.phone else None
+    secondary: list[dict] = []
+    if patient.dob:
+        secondary.append({"dob": patient.dob})
+    if phone:
+        secondary.append({"contact.phone": phone})
+
+    # Same name is only a likely duplicate when dob or phone also matches.
+    if not secondary:
+        return None
+
+    return await db.patients.find_one({**name_match, "$or": secondary})
 
 
 # Register a new patient, guarding against duplicates.
@@ -268,7 +273,7 @@ async def create_patient(
                     "message": (
                         f"A patient '{existing.get('first_name','')} {existing.get('last_name','')}' "
                         f"(MRN {existing.get('mrn','')}) already matches these details. "
-                        "Open the existing record, or resubmit with force=true to register anyway."
+                        "Open the existing record, or continue to register this as a separate patient."
                     ),
                     "existing_patient_id": str(existing["_id"]),
                     "existing_mrn": existing.get("mrn"),
@@ -289,7 +294,7 @@ async def create_patient(
         "dob": patient.dob,
         "gender": patient.gender,
         "blood_group": patient.blood_group,
-        "national_id": patient.national_id,
+        "national_id": (patient.national_id.strip() or None) if patient.national_id else None,
         "guardian_national_id": patient.guardian_national_id,
         "guardian_name": patient.guardian_name,
         "contact": patient.contact.model_dump() if patient.contact else None,

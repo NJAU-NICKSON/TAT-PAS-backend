@@ -140,5 +140,7 @@ class PrescriptionInDB(BaseModel):
     updated_at: datetime
     patient_name: Optional[str] = None
     doctor_name: Optional[str] = None
+    department: Optional[str] = None
+    ward_location: Optional[str] = None
 
 PrescriptionResponse = PrescriptionInDB
